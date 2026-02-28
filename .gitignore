@@ -1,0 +1,7 @@
+Version1/bin/
+Version1/obj/
+.vs/
+*.user
+*.suo
+*.cache
+*.log
