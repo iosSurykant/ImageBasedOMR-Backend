@@ -352,9 +352,11 @@ namespace SQCScanner.Controllers
                     if (exists)
                     {
                         // DB table is update -- DONE
+                        DateTime currentDate = DateTime.Now;
                         var ReturnDetails = _dbContext.ImgTemplate.FirstOrDefault(x => x.FileName == FileName);
                         var fileNameDel = ReturnDetails.JsonPath;    // update
                         ReturnDetails.JsonPath = relativePath;
+                        ReturnDetails.CreateAt = currentDate.ToString();
                         await _dbContext.SaveChangesAsync();
 
                         // delete old File 
@@ -413,8 +415,7 @@ namespace SQCScanner.Controllers
             }
         }
     
-        // 
-        
+       
         
     
     }

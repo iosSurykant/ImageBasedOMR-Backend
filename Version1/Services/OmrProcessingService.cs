@@ -35,6 +35,7 @@ using ZXing.PDF417.Internal;
 using ZXing;
 using Microsoft.EntityFrameworkCore.Metadata.Internal;
 using OpenCvSharp.Aruco;
+using CvSize = OpenCvSharp.Size;
 
 namespace Version1.Services
 {
@@ -52,6 +53,8 @@ namespace Version1.Services
 
         public async Task<OmrResult> ProcessOmrSheet(string imagePath, string templatePath, string imageUrl, int ser, string userName)
         {
+
+
 
             string debugging = Path.GetFileName(Path.GetDirectoryName(imagePath));
 
@@ -150,7 +153,6 @@ namespace Version1.Services
                 string outputPath6 = Path.Combine($"{alignedImages}/ERROR", result.FileName);
                 Cv2.ImWrite(outputPath6, mat);
                 return result;
-
             }
 
             Point2f[] demoDetaction = MatImgOut
@@ -176,7 +178,7 @@ namespace Version1.Services
             }
             string markedPath = Path.Combine(alignedImages, $"marked_{Guid.NewGuid()}.png");
             //demoImg.SaveImage(markedPath);
-                
+
             // Detact corners mark scaning and SAVE
             foreach (var pt in scaningDetaction)
             { 
@@ -196,12 +198,18 @@ namespace Version1.Services
             {
                 Mat H = Cv2.GetAffineTransform(scaningDetaction, demoDetaction);
                 Cv2.WarpAffine(RotatedFinal, aligned, H, demoImg.Size());
-                markedPath2 = Path.Combine(alignedImages, $"marked_{Guid.NewGuid()}.png");
+                markedPath2 = Path.Combine(alignedImages, $"wraped_{Guid.NewGuid()}.png");
                 //aligned.SaveImage(markedPath2);
             }
             else if (demoDetaction.Length == 2 && scaningDetaction.Length == 2)
             {
-                aligned = FixWithTwoPoints(RotatedFinal, scaningDetaction, demoDetaction);
+                //aligned = FixWithTwoPoints(RotatedFinal, scaningDetaction, demoDetaction);
+                aligned = FixWithTwoPointsAdvanced(
+                       RotatedFinal,
+                       scaningDetaction,
+                       demoDetaction,
+                       new CvSize(demoImg.Width, demoImg.Height)
+                );
                 markedPath2 = Path.Combine(alignedImages, $"marked_{Guid.NewGuid()}.png");
             }
             else
@@ -226,8 +234,8 @@ namespace Version1.Services
             var debugImage = image.Clone();
             // Make clone init.
 
-            // 3. Reffrence points check -- DONE
-            if (true)     
+            // 3. Reffrence points check -- DONE   
+            if (false)     
             {
                var referenceFields = template["referncefield"]?.ToArray();          // Reffrecne points ko array me return karta hai
                 if (referenceFields != null && referenceFields.Length > 0)          // agr mila to check image par apply hai ya ni hai bubble detaction.
@@ -290,7 +298,7 @@ namespace Version1.Services
                 }
 
                 string fieldValue ="";
-                if(fieldType != "barcode")
+                if (fieldType != "barcode")
                 {
                     fieldValue = field["fieldValue"]!.ToString();  // convert into string if blank return error
                     if (string.IsNullOrWhiteSpace(fieldValue))
@@ -298,15 +306,33 @@ namespace Version1.Services
                         throw new ArgumentException($"Missing 'fieldValue' in field: must be \"Integer\", \"Alphabet\", or \"Custom\"");
                     }
                 }
+
                 string fieldname = field["fieldName"]!.ToString();                              // extract value
                 var bubblesArray = field["bubbles"]?.ToObject<List<BubbleInfo>>();              // extract value
                 bool allowMultiple = field["allowMultiple"]?.Value<bool>() ?? true;             // extract value
                 string blankOuputSymbol = field["blankOuputSymbol"]?.ToString() ?? "#";         // extract value
                 string multipleBubbleOutput = field["multipleBubbleOutput"]?.ToString() ?? "*"; // extract value
-
+                
                 if (bubblesArray != null)
                 {
-                    var bubbleRects = bubblesArray.Select(b => new Rectangle(b.X, b.Y, b.Width, b.Height)).ToList();
+                    List<Rectangle> bubbleRects;
+                    if (fieldType != "barcode")
+                    {
+                        bubbleRects = bubblesArray.Select(b => new Rectangle(b.X, b.Y, b.Width, b.Height)).ToList();
+                    }
+                    else
+                    {
+                        bubbleRects = new List<Rectangle>
+                        {
+                            new Rectangle(
+                                (int)field["x"],
+                                (int)field["y"],
+                                (int)field["width"],
+                                (int)field["height"]
+                            )
+                        };
+                    }
+                    //var bubbleRects = bubblesArray.Select(b => new Rectangle(b.X, b.Y, b.Width, b.Height)).ToList();
                     foreach (var pt in bubbleRects)
                     {
                         int x = (int)pt.X; 
@@ -337,8 +363,8 @@ namespace Version1.Services
                         Cv2.DrawContours(aligned, contoursValConvty, -1, new Scalar(225, 255, 0), 1);
                     }
                     Mat OMRSheet = new Mat();
-
-                    //  CLOSE - here we will add drawing to design bubble cordination on image and share to isBubble fill methord
+                    
+                    //  CLOSE -- here we will add drawing to design bubble cordination on image and share to isBubble fill methord
                     var options = field["Custom"]?.ToObject<List<string>>()?.Where(o => !string.IsNullOrWhiteSpace(o)).ToList();
                     if (field["Custom0"] != null && (options == null || options.Count == 0))
                     {
@@ -351,14 +377,67 @@ namespace Version1.Services
 
                     string readdirection = field["ReadingDirection"]!.ToString();
                     bool Bestbubble = !field["best_bubble"]?.Value<bool>() ?? true;
-                    var LithoCode = new List<string>(); 
+                    var LithoCode = new List<string>();
                     if (fieldType == "formfield")    
                     {
-                        var answers = ExtractAnswersFromBubbles(image, bubbleRects, bubblesArray, options, readdirection, bubbleIntensity, allowMultiple, blankOuputSymbol, multipleBubbleOutput, Bestbubble);
-                        var combined = string.Join("", answers.OrderBy(kv => int.Parse(kv.Key.Replace("Q", "")))
-                        .Select(kv => kv.Value).Where(val => val != "No bubble Mark" && val != "InvalidOption"));
-                        Console.WriteLine(combined);
-                        result.FieldResults[fieldname] = combined.TrimEnd('*');   //combined.Trim('*');
+
+                        // Filter Data Results 
+                        bool isMerge = field["isMerged"]?.Value<bool>() ?? false;
+                        if (isMerge)
+                        {
+                            List<string> responseList = new List<string>();
+                            string fieldmerged = field["mergedInto"]!.ToString() ?? null;
+                            var dobFields = template["fields"].Where(f => f["mergedInto"] != null && f["mergedInto"].ToString() == fieldmerged).ToList();
+                            foreach (var fieldDupli in dobFields)
+                            {
+                                var bubblesArrayMarge = fieldDupli["bubbles"]?.ToObject<List<BubbleInfo>>();
+                                var optionsMarge = fieldDupli["Custom"]?.ToObject<List<string>>()?.Where(o => !string.IsNullOrWhiteSpace(o)).ToList();
+                                var bubbleRectsMarge = bubblesArrayMarge.Select(b => new Rectangle(b.X, b.Y, b.Width, b.Height)).ToList();
+                                foreach (var pt in bubbleRectsMarge)
+                                {
+                                    int x = (int)pt.X;
+                                    int y = (int)pt.Y;
+                                    int width = pt.Width;
+                                    int height = pt.Height;
+                                    int diameter = Math.Min(pt.Width, pt.Height);
+
+                                    // Take the smaller of width and height
+                                    OpenCvSharp.Point topLeftBub = new OpenCvSharp.Point(x, y);
+                                    OpenCvSharp.Point bottomRightBub = new OpenCvSharp.Point(x + width, y + height);
+                                    Cv2.Rectangle(aligned, topLeftBub, bottomRightBub, new Scalar(0, 0, 255), 1);
+
+                                    //Crop the region of interest(ROI) inside the bounding box
+                                    Mat roi = new Mat(aligned, new OpenCvSharp.Rect(x, y, width, height));
+
+                                    // ROI ko gray to binary
+                                    Mat grayCont = new Mat();
+                                    Cv2.CvtColor(roi, grayCont, ColorConversionCodes.BGR2GRAY);
+
+                                    // ROI ko Threshold image me convert karna
+                                    Mat binaryConvty = new Mat();
+                                    Cv2.Threshold(grayCont, binaryConvty, 0, 255, ThresholdTypes.BinaryInv | ThresholdTypes.Otsu);
+                                    // Blank Value
+                                    OpenCvSharp.Point[][] contoursValConvty;
+                                    HierarchyIndex[] _;
+                                    Cv2.FindContours(binaryConvty, out contoursValConvty, out _, RetrievalModes.List, ContourApproximationModes.ApproxSimple);
+                                    Cv2.DrawContours(aligned, contoursValConvty, -1, new Scalar(225, 255, 0), 1);
+                                }
+                                var answers = ExtractAnswersFromBubbles(image, bubbleRectsMarge, bubblesArrayMarge, optionsMarge, readdirection, bubbleIntensity, allowMultiple, blankOuputSymbol, multipleBubbleOutput, Bestbubble);
+                                var combined = string.Join("", answers.OrderBy(kv => int.Parse(kv.Key.Replace("Q", ""))).Select(kv => kv.Value).Where(val => val != "No bubble Mark" && val != "InvalidOption"));
+                                Console.WriteLine(combined);
+                                responseList.Add(combined);
+                            }
+                            string finalResponse = string.Join("", responseList);
+                            result.FieldResults[fieldname] = finalResponse;
+                        }
+                        else
+                        {
+                            var answers = ExtractAnswersFromBubbles(image, bubbleRects, bubblesArray, options, readdirection, bubbleIntensity, allowMultiple, blankOuputSymbol, multipleBubbleOutput, Bestbubble);
+                            var combined = string.Join("", answers.OrderBy(kv => int.Parse(kv.Key.Replace("Q", "")))
+                            .Select(kv => kv.Value).Where(val => val != "No bubble Mark" && val != "InvalidOption"));
+                            Console.WriteLine(combined);
+                            result.FieldResults[fieldname] = combined; //combined.TrimEnd('*');
+                        }
                     }
                     else if (fieldType == "questionfield")
                     {
@@ -446,7 +525,7 @@ namespace Version1.Services
         }
 
 
-        //0.Image should be auto rotated 
+        //0.Image should be auto rotated  -- NOT USING 
         public async Task<(Mat FinalImage, bool Success, string Message)> RotateAndCheckMarkers(
         Mat matImg, JObject template, double bubbleIntensity = 0.3)
         {
@@ -578,7 +657,7 @@ namespace Version1.Services
                 //var topExtra = 30;     // 
 
                 var rotate = 0;
-                int extra = 10;
+                int extra = 8;
                 foreach (var pt in templateCorners)
                 {
                     rotate = rotate + 1;
@@ -602,9 +681,9 @@ namespace Version1.Services
                     //}
 
 
-                    x = (int)pt.X - 10;
-                    y = (int)pt.Y - 35;
-                    extra = 10;
+                    x = (int)pt.X;
+                    y = (int)pt.Y;
+                    extra = 15;
 
                     // make cordination variable
                     OpenCvSharp.Point topLeft1 = new OpenCvSharp.Point(x, y);
@@ -731,7 +810,6 @@ namespace Version1.Services
                             }
                         }
                     }
-                
                 }
                 return (SelctImg == "demo") ? pointsList : pointsList2;
             });
@@ -1167,6 +1245,69 @@ namespace Version1.Services
             return output;
         }
 
+        public Mat FixWithTwoPointsAdvanced(Mat src, Point2f[] scanPts, Point2f[] demoPts, CvSize outputSize)
+        {
+            if (scanPts.Length != 2 || demoPts.Length != 2)
+                throw new Exception("Two points required");
+
+            // Distance between scan points
+            double scanDist = Math.Sqrt(
+                Math.Pow(scanPts[1].X - scanPts[0].X, 2) +
+                Math.Pow(scanPts[1].Y - scanPts[0].Y, 2)
+            );
+
+            // Distance between demo points
+            double demoDist = Math.Sqrt(
+                Math.Pow(demoPts[1].X - demoPts[0].X, 2) +
+                Math.Pow(demoPts[1].Y - demoPts[0].Y, 2)
+            );
+
+            // Scale ratio
+            double scale = demoDist / scanDist;
+
+            // Angle of scan line
+            double scanAngle = Math.Atan2(
+                scanPts[1].Y - scanPts[0].Y,
+                scanPts[1].X - scanPts[0].X
+            );
+
+            // Angle of demo line
+            double demoAngle = Math.Atan2(
+                demoPts[1].Y - demoPts[0].Y,
+                demoPts[1].X - demoPts[0].X
+            );
+
+            // Rotation angle difference
+            double angle = (demoAngle - scanAngle) * 180 / Math.PI;
+
+            // Rotation center
+            Point2f center = scanPts[0];
+
+            // Rotation + scale matrix
+            Mat rotMat = Cv2.GetRotationMatrix2D(center, angle, scale);
+
+            // Translation correction
+            double tx = demoPts[0].X - scanPts[0].X;
+            double ty = demoPts[0].Y - scanPts[0].Y;
+
+            rotMat.Set<double>(0, 2, rotMat.Get<double>(0, 2) + tx);
+            rotMat.Set<double>(1, 2, rotMat.Get<double>(1, 2) + ty);
+
+            Mat aligned = new Mat();
+
+            Cv2.WarpAffine(
+                src,
+                aligned,
+                rotMat,
+                outputSize,
+                InterpolationFlags.Linear,
+                BorderTypes.Constant,
+                Scalar.White
+            );
+
+            return aligned;
+        }
+
         private void SetProperty(OmrResult result, string propName, string value)
         {
             var prop = typeof(OmrResult).GetProperty(propName);
@@ -1175,34 +1316,3 @@ namespace Version1.Services
         }
     }
 }
-
-
-
-
-// Wrong bubble detaction  -
-
-
-
-
-
-
-//var maxEntry = densityPercentList.Aggregate((x, y) => x.Key > y.Key ? x : y);
-//filledOptions.Add(maxEntry.Value);
-
-// add filled value add init. 
-
-// join, type coprations (ddl, dml, dql, dcl,  tcl)  
-
-// Bubble sort - one by one sabhi value ko compare karete hai, 
-// Selection sort - sorted and unsorted element part - unsorted me se lowest value ko uske 1st index se place karnge jise next me sorted extract hoga. same RE-CALL. start form unsorted elements to sorted extracted 
-// Insertion Sort - a[prev] compare with a[prev+1] which are save into pointer, first us sorted replace place value b/w a[previous value] 
-
-// packet filter firewall: check tcp and ip header, network and transport layer, block service (FTP,http, etc), default allow/action OPTIONS, block via Source IP/Source PORT along with desitnations || security less: it's data/payload
-// Application level gatway (Proxy firewall): it's verify data and payload, end to end relay, proxy server, filter based on application data, more secure, slow speed, 7th application layer based,  
-// Stateful Inspection Firewall: yh ek packet ko ni dekhta balki pari satate ko dekhta hai, connection ki history bhi, 
-// Network Layer Firewall : yh OSI model ka 3rd layer hai, yeh IP address aur protocol par filter karta hai, fast speed, less secure, sorce or destination 
-// Next - Generation Firewall - NGFW : ai base thek firewall hai, yeh traditional firewall se aage hai, yeh application layer par filter karta hai, yeh intrution detection and prevention system (IDPS) bhi include karta hai, yeh advanced malware protection bhi provide karta hai, yeh encrypted traffic ko bhi inspect kar sakta hai. 
-// Tunnaling: data/ip encript karna or scrure chanel se send karna. VPN (public network.
-
-//  if bubble filled then add with index + dencity        
-//  Dynamic for add range for mark less then not count.   =    Link Danesity
