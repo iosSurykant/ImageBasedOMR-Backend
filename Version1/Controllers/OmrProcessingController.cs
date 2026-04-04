@@ -10,6 +10,7 @@ using System.Security.Claims;
 using OpenCvSharp;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Cors;
+using System.Text;
 
 namespace Version1.Controllers
 {
@@ -235,5 +236,23 @@ namespace Version1.Controllers
             }
             return File(imageBytes, "image/png", "processed_image.png");
         }
+
+
+        [HttpPost("GetCSVHeader")]
+        public async Task<IActionResult> getHeader(IFormFile CSV1)
+        {
+
+            if (CSV1 == null || CSV1.Length == 0)
+                return BadRequest("File not found");
+            using (var reader = new StreamReader(CSV1.OpenReadStream()))
+            {
+                var headerLine = await reader.ReadLineAsync();
+                var headers = headerLine.Split(','); 
+
+                return Ok(headers);
+            }
+        }
+
+
     }
 }

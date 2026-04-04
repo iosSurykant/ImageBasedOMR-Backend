@@ -30,6 +30,7 @@ builder.Services.AddScoped<RealtimeCSV_Rec>();
 builder.Services.AddSingleton<OmrProcessingControlService>();
 builder.Services.AddSingleton<WebSocketConnectionManager>();
 builder.Services.AddSingleton<WebSoketHandler>();
+builder.Services.AddScoped<MargeGenSerivce>();
 
 var configuration = builder.Configuration;
 builder.Services.AddJwtAuthentication(configuration);
