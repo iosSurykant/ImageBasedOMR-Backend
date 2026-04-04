@@ -307,7 +307,7 @@ public class margeCSV
     public IFormFile CSV1 { get; set; }
     public IFormFile CSV2 { get; set; }
     public string CommonKey { get; set; }
-    public string ignoreColumns { get; set; }
-    public string Filer_key { get; set; }
+    public string ignoreColumns { get; set; } = "";
+    public string Filer_key { get; set; } = "";
 
 }

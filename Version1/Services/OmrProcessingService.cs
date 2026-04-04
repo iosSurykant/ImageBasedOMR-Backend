@@ -680,10 +680,38 @@ namespace Version1.Services
                     //    y = (int)pt.Y - 30;
                     //}
 
+                    //x = (int)pt.X;
+                    //y = (int)pt.Y;
+                    //extra = 15;
 
-                    x = (int)pt.X;
-                    y = (int)pt.Y;
-                    extra = 15;
+                    // PART AMITY 4 - SYCONIC SCANNER -- 100% ACC
+                    //if (rotate == 1)
+                    //{
+                    //    x = (int)pt.X;
+                    //    y = (int)pt.Y - 10;
+                    //    extra = 15;
+                    //}
+                    //else
+                    //{
+                    //    x = (int)pt.X;
+                    //    y = (int)pt.Y;
+                    //    extra = 15;
+                    //}
+
+                    // PART AMITY 3 - SYCONIC SCANNER  -- 100% ACC
+                    if (rotate == 1)
+                    {
+                        x = (int)pt.X - 10;
+                        y = (int)pt.Y - 20;
+                        extra = 7;
+                    }
+                    else
+                    {
+                        x = (int)pt.X;
+                        y = (int)pt.Y - 5;
+                        extra = 10;
+                    }
+
 
                     // make cordination variable
                     OpenCvSharp.Point topLeft1 = new OpenCvSharp.Point(x, y);
