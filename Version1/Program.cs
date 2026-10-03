@@ -23,7 +23,7 @@ builder.Host.UseSerilog();
 builder.Services.AddDbContext<ApplicationDbContext>(options => options.UseSqlServer(builder.Configuration.GetConnectionString("dbc")));
 builder.WebHost.ConfigureKestrel(options =>
 {
-    options.ListenAnyIP(9900);
+    options.ListenAnyIP(7400);
 });
 builder.Services.AddScoped<OmrProcessingService>();
 builder.Services.AddScoped<JwtAuth>();
@@ -66,13 +66,9 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAnyOrigin", policy =>
     {
-        policy.AllowAnyOrigin()
-              .AllowAnyHeader()
-              .AllowAnyMethod();
+        policy.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod();
     });
 });
-
-
 
 // Syncfusion Key Add
 Syncfusion.Licensing.SyncfusionLicenseProvider.RegisterLicense("Ngo9BigBOggjHTQxAR8/V1NCaF5cXmZCf1FpRmJGdld5fUVHYVZUTXxaS00DNHVRdkdnWXhdcHRVQmVeV0F3Wks=\r\n");

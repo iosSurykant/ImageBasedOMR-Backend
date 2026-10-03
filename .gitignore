@@ -4,6 +4,11 @@ Version1/wFileManager/
 Version1/wwwroot/
 Version1/Logs/
 .vs/
+<<<<<<< Updated upstream
 
 Version1/appsettings.json
 Version1/appsettings.*.json
+=======
+Version1/appsettings.json/
+/Version1/appsettings.json
+>>>>>>> Stashed changes

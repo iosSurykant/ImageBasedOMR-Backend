@@ -93,7 +93,6 @@ namespace SQCScanner.Controllers
             }
         }
 
-
         [HttpPut("UpdateImgTemplate")]
         public async Task<IActionResult> UpdateImgTemplate([FromForm] StaticImgClass model)
         {
@@ -168,15 +167,13 @@ namespace SQCScanner.Controllers
             }
         }
 
-
-
         [HttpGet("ViewImgTempale")]
         public IActionResult GetAllTemplates(int? tempId)
         {
             try
             {
                 object templates;
-                if (tempId == 0)
+                if (tempId == null)
                 {
                     templates = _dbContext.StaticImgClass.ToList();
                 }
