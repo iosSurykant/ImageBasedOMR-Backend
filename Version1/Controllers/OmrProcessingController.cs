@@ -15,6 +15,7 @@ using Microsoft.Data.SqlClient;
 using Dapper;
 using Syncfusion.EJ2.Notifications;
 using ZXing.Aztec.Internal;
+using Microsoft.EntityFrameworkCore;
 
 namespace Version1.Controllers
 {
@@ -80,11 +81,39 @@ namespace Version1.Controllers
 
             // Token handler UserId Extract
             var tokenHandler = new JwtSecurityTokenHandler();
-           var jwtToken = tokenHandler.ReadJwtToken(model.Token);
+            var jwtToken = tokenHandler.ReadJwtToken(model.Token);
             var userId = jwtToken.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier || c.Type == "nameid")?.Value;
             var userName = jwtToken.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier || c.Type == "unique_name")?.Value;
+            string UserEmail = jwtToken.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier || c.Type == "email")?.Value;
+            string UserRole = jwtToken.Claims.FirstOrDefault(a => a.Type == ClaimTypes.NameIdentifier || a.Type == "role")?.Value;
+
             string folderPAth = "" ;
             folderPath = Path.Combine(userId, model.folderPath);
+            int TestId = 0;
+            //using (var conn = new SqlConnection(_Configuration.GetConnectionString("dbc")))
+            //{
+            //    conn.OpenAsync();
+            //    string query = $"select Sr from TestCases where TestName = @path";
+            //    var test = await conn.QueryAsync<int>(query, new {path = model.folderPath});
+            //    foreach(var a in test)
+            //    {
+            //        model.testId = a;
+            //    }
+            //}
+            using (var conn = new SqlConnection(_Configuration.GetConnectionString("dbc")))
+            {
+                await conn.OpenAsync();
+                string query = @" SELECT Sr FROM TestCases WHERE TestName = @path";
+                var test = await conn.QueryAsync<int>(
+                    query,new { path = model.folderPath }
+                );
+
+                foreach (var a in test)
+                {
+                    model.testId = a;
+                    break;
+                }
+            }
 
 
             // Y/N = ReScan failure Img Folder.
@@ -151,7 +180,7 @@ namespace Version1.Controllers
                                 { 
                                     if (crttb == 1)
                                     {
-                                        var tableCrt = await _recordTable.TableCreation(res, model.idTemp, model.folderPath, userId, model.idTemp);
+                                        var tableCrt = await _recordTable.TableCreation(res, model.idTemp, model.folderPath, userId, model.idTemp, model.testId, UserEmail, UserRole);
                                     }
                                     crttb++;
                                 }
@@ -229,12 +258,12 @@ namespace Version1.Controllers
                 return NotFound(resp);
             }
         }
-
         public class processOmr {
             public string folderPath { get; set; } = "";
             public int idTemp { get; set; }
             public bool IsSaveDb { get; set; } = true;
             public bool failReScan { get; set; } = true;
+            public int testId { get; set; }
             public string Token { get; set; } = "";
         }
 
@@ -299,15 +328,41 @@ namespace Version1.Controllers
         [HttpPost("GetCSVHeader")]
         public async Task<IActionResult> getHeader(IFormFile CSV1)
         {
+            var getToken = Request.Headers["Authorization"].FirstOrDefault()?.Replace("Bearer ", "").Trim();
+            var tokenHandler = new JwtSecurityTokenHandler();
+            var jwtToken = tokenHandler.ReadJwtToken(getToken);
+            var userId = jwtToken.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier || c.Type == "nameid")?.Value;
 
             if (CSV1 == null || CSV1.Length == 0)
                 return BadRequest("File not found");
             using (var reader = new StreamReader(CSV1.OpenReadStream()))
             {
                 var headerLine = await reader.ReadLineAsync();
-                var headers = headerLine.Split(','); 
-
+                var headers = headerLine.Split(',');
+                var list = await _dbContext.DataFinalized.ToListAsync();
+                var TempList = list.Where(a => a.state == "review" && a.EmpId == int.Parse(userId));
+                //return Ok(new {header = headers, Response = TempList });
                 return Ok(headers);
+
+            }
+        }
+        [HttpPost("GetCSVHeaderMob")]
+        public async Task<IActionResult> getHeader2(IFormFile CSV1)
+        {
+            var getToken = Request.Headers["Authorization"].FirstOrDefault()?.Replace("Bearer ", "").Trim();
+            var tokenHandler = new JwtSecurityTokenHandler();
+            var jwtToken = tokenHandler.ReadJwtToken(getToken);
+            var userId = jwtToken.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier || c.Type == "nameid")?.Value;
+            if (CSV1 == null || CSV1.Length == 0)
+                return BadRequest("File not found");
+            using (var reader = new StreamReader(CSV1.OpenReadStream()))
+            {
+                var headerLine = await reader.ReadLineAsync();
+                var headers = headerLine.Split(',');
+                var list = await _dbContext.DataFinalized.ToListAsync();
+                var TempList = list.Where(a => a.state == "review" && a.EmpId == int.Parse(userId));
+                return Ok(new {header = headers, Response = TempList });
+
             }
         }
 
@@ -330,10 +385,7 @@ namespace Version1.Controllers
                     {
                         string querry = $"SELECT * FROM [{exists.TABLE_NAME}] ORDER BY Id  OFFSET ({PageNo} - 1) * {PageSize} ROWS FETCH NEXT {PageSize} ROWS ONLY";
                         dataResp = _conn.Query(querry);
-
-
                         value = _conn.QuerySingle<int>($"SELECT count(*) FROM [{exists.TABLE_NAME}]");
-
                     }
                     else
                     {

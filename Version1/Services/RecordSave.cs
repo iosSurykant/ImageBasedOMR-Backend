@@ -5,6 +5,7 @@ using DocumentFormat.OpenXml;
 using Microsoft.AspNetCore.Routing.Template;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore.Metadata.Internal;
+using SQCScanner.Modal.DataFinalaization;
 using Syncfusion.EJ2.Linq;
 using TesseractOCR.Renderers;
 using Version1.Modal;
@@ -30,9 +31,9 @@ namespace SQCScanner.Services
         }
 
         // Save Record into DB 
-        public async Task<Dictionary<string, string>> RecordSaveVal(OmrResult respose, int templateId, string userName, bool IsSaveDb, string folderPath, string imagePath, string templateName, string userId)
+        public async Task<Dictionary<string, object>> RecordSaveVal(OmrResult respose, int templateId, string userName, bool IsSaveDb, string folderPath, string imagePath, string templateName, string userId)
         {
-            Dictionary<string, string> records = new Dictionary<string, string>();
+            Dictionary<string, object> records = new Dictionary<string, object>();
             userName = userName ?? "";
             var Query = "";
             dynamic res;
@@ -162,7 +163,7 @@ namespace SQCScanner.Services
                             string saveFile = "";
                             if(dataList.Key== "FileName")
                             {
-                                saveFile = Path.Combine(_env.ContentRootPath, dataList.Value);
+                                saveFile = Path.Combine(_env.ContentRootPath, dataList.Value.ToString());
                                 existDirect = Path.GetDirectoryName(saveFile);
                                 if (!Directory.Exists(existDirect))
                                 {
@@ -178,7 +179,8 @@ namespace SQCScanner.Services
                                 }
                             }
                         }
-                        records.TryAdd("QC_Status","");
+                        records.TryAdd("QC", 0);
+
                         if (isRes.Count >= 1) 
                         {
                             // Record Update _ Problem Will be = jab koi record(column ki rows) pahle se add ho gya hai or us record ko mene apne main scan response se hata diya hai wo update k case me hatega ni pahle waha record db se save rahega.
@@ -194,7 +196,6 @@ namespace SQCScanner.Services
                             {
                                 folderPath = Path.Combine("wFileManager/", folderPath, imgName);
                                 pathIns = pathIns.Replace("\\", "/");
-                                //records.Add("ServePath", folderPath);
                                 records["FileName"] = folderPath;
                             }
                             res = new
@@ -207,10 +208,6 @@ namespace SQCScanner.Services
                         {
                             var insertQuery = $@"INSERT INTO [{exists?.TABLE_NAME?.ToString()}] ({string.Join(", ", records.Select(a => $"[{a.Key}]"))}) VALUES ({string.Join(", ", records.Select(c => "'" + c.Value + "'"))})";
                             result = connection.Query(insertQuery);
-                            //string imgName1 = Path.GetFileName(imagePath);
-                            //folderPath = Path.Combine("wFileManager/", folderPath, imgName1);
-                            //records.Add("ServePath", folderPath);
-                            //records["FileName"] = folderPath;
                             existDirect = Path.GetDirectoryName(existDirect);
                             string resulta = string.Join(",",records.Select(x => $"{x.Key}={x.Value}"));
                             _realTimeCSV.RealtimeCSV(records, csvName, existDirect);

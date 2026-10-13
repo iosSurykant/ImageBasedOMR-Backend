@@ -69,6 +69,36 @@ namespace SQCScanner.Migrations
                     b.ToTable("staticImgDesigns");
                 });
 
+            modelBuilder.Entity("SQCScanner.Modal.DataFinalaization.DataFinalizedClass", b =>
+                {
+                    b.Property<int>("Sr")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Sr"));
+
+                    b.Property<int>("EmpId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Remark")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<int>("TestId")
+                        .HasColumnType("int");
+
+                    b.Property<DateOnly>("Time")
+                        .HasColumnType("date");
+
+                    b.Property<string>("state")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.HasKey("Sr");
+
+                    b.ToTable("DataFinalized");
+                });
+
             modelBuilder.Entity("SQCScanner.Modal.EmpModel", b =>
                 {
                     b.Property<int>("Id")

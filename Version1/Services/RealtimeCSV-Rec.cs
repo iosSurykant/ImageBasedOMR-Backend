@@ -14,11 +14,8 @@ namespace SQCScanner.Services
             _context = context;
         }
 
-        public async Task<string> RealtimeCSV(
-        Dictionary<string, string> record,
-        string folderPAth, string dirPath)
+        public async Task<string> RealtimeCSV(Dictionary<string, object> record, string folderPAth, string dirPath)
         {
-            //wFileManager/ScanResult
             try
             {
                 

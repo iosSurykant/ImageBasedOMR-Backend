@@ -53,6 +53,7 @@
   </ItemGroup>
   <ItemGroup>
     <Folder Include="NewFolder\" />
+    <Folder Include="Services\NewFolder\" />
       <Folder Include="wwwroot\" />
       <Folder Include="wwwroot\" />
     </ItemGroup>

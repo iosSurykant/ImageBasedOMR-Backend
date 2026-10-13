@@ -117,13 +117,7 @@ namespace SQCScanner.Controllers
         {
             try
             {
-                _logger.LogInformation(
-                    "UpdateImgTemplate started. TemplateId: {TemplateId}, TemplateName: {TemplateName}",
-                    model.TemplateId,
-                    model.TemplateName);
-
-                // Validate TemplateId
-               
+                _logger.LogInformation("UpdateImgTemplate started. TemplateId: {TemplateId}, TemplateName: {TemplateName}", model.TemplateId,  model.TemplateName);
 
                 // Find existing template
                 var templateEntity = await _dbContext.StaticImgClass.FirstOrDefaultAsync(t => t.Id == model.Id);

@@ -3,6 +3,8 @@ using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.SqlClient;
 using Newtonsoft.Json.Linq;
+using SQCScanner.Modal.DataFinalaization;
+using Version1.Data;
 using Version1.Modal;
 
 namespace SQCScanner.Services
@@ -11,24 +13,37 @@ namespace SQCScanner.Services
     {
         private readonly IConfiguration _configuration;
         private readonly string _connectionString;
-        public table_gen(IConfiguration configuration)
+        private readonly ApplicationDbContext _context;
+        public table_gen(IConfiguration configuration, ApplicationDbContext context)
         {
             _configuration = configuration;
             _connectionString = _configuration.GetConnectionString("dbc")!;
+            _context = context;
         }
-        public async Task<List<string>> TableCreation(OmrResult respose, int templateId, string folderPAth, string userId, int idTemp)
+        public async Task<List<string>> TableCreation(OmrResult respose, int templateId, string folderPAth, string userId, int idTemp, int test, string UserEmail, string b)
         {
 
+            string dateCurrent = DateTime.Now.ToString("dd-MM-yyyy/HH:mm:ss");
+            string getFolderName = new DirectoryInfo(folderPAth).Name;
+            string tableName = $"Tem_{userId}_${idTemp}$_{getFolderName}";
             var fieldNames = new List<string>();
-
+            TimeZoneInfo indiaTimeZone = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
+            DateTime time = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, indiaTimeZone);
+            _context.DataFinalized.Add(new DataFinalizedClass
+            {
+                Time = time,
+                EmpId = int.Parse(userId),
+                TestId = test,
+                Remark = $"UserEmailId-{UserEmail},UserRole-{b},TemplateId-{templateId},TestName-{folderPAth},TableName-{tableName}_{dateCurrent}",
+                state = "review"
+            });
+            _context.SaveChanges();
+            
             using (var connection = new SqlConnection(_connectionString))
             {
                 connection.Open();
                 //string dateCurrent = DateTime.Now.ToString("dd-MM-yyyy/HH:mm:ss");
                 //string tableName = $"Template_{templateId}";
-                string dateCurrent = DateTime.Now.ToString("dd-MM-yyyy/HH:mm:ss");
-                string getFolderName = new DirectoryInfo(folderPAth).Name;
-                string tableName = $"Tem_{userId}_${idTemp}$_{getFolderName}";
                 string checkTableSql = @"SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME LIKE @TableName";
                 var exists = await connection.QueryFirstOrDefaultAsync(checkTableSql, new { TableName = tableName+"%" });
                 bool tableExists = exists != null;
@@ -38,13 +53,11 @@ namespace SQCScanner.Services
                     .Select(fr => fr.Key)
                     .ToList();
                 fieldNames.AddRange(fields);
-                fields.Add("QC_Status");
+                fields.Add("QC");
                 if (!tableExists)
                 {
                     tableName = $"{tableName}_{dateCurrent}";
-                    var columnsSql = string.Join(", ", fields.Select(f => $"[{f}] NVARCHAR(MAX)"));
-                    Console.WriteLine(columnsSql);
-
+                    var columnsSql = string.Join(", ", fields.Select(f => f=="QC" ? $"[{f}] BIT": $"[{f}] NVARCHAR(MAX)")); 
                     string createTableSql = $"CREATE TABLE [{tableName}] (Id INT IDENTITY(1,1) PRIMARY KEY, {"[LiveTime] NVARCHAR(MAX)"},{"[UserName] NVARCHAR(MAX)"},{"[Status] NVARCHAR(MAX)"}, {"[Report] NVARCHAR(MAX)"}, {columnsSql})"; 
                     await connection.QueryAsync(createTableSql);
                 }

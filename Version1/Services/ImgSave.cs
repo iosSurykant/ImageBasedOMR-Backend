@@ -21,7 +21,7 @@ namespace SQCScanner.Services
             try
             {
 
-                var folderPathMain = "";
+                //var folderPathMain = "";
                 //var getFile = Path.GetFileName(imgPath);
                 //if (status)
                 //{
@@ -39,8 +39,8 @@ namespace SQCScanner.Services
                 //folderPathMain = Path.Combine(folderPathMain, getFile);
                 
                 // Check file Already Saved.
-                if (!File.Exists(folderPathMain))
-                {
+                //if (!File.Exists(folderPathMain))
+                //{
                     // Save Img  
                     //using (var ImgTemp = new FileStream(imgPath, FileMode.Open, FileAccess.Read))
                     //using (var TempSet = new FileStream(folderPathMain, FileMode.Create, FileAccess.Write))
@@ -48,21 +48,21 @@ namespace SQCScanner.Services
                     //    await ImgTemp.CopyToAsync(TempSet);
                     //}
                     
-                    res = new
-                    {
-                        message = "File Save Into TemplateWise n FolderName",
-                        state = true,
-                    };
+                //    res = new
+                //    {
+                //        message = "File Save Into TemplateWise n FolderName",
+                //        state = true,
+                //    };
                  
-                }
-                else
-                {
-                    res = new
-                    {
-                        message = "Already File Save Into TemplateWise n FolderName.",
-                        state = false,
-                    };
-                }
+                //}
+                //else
+                //{
+                //    res = new
+                //    {
+                //        message = "Already File Save Into TemplateWise n FolderName.",
+                //        state = false,
+                //    };
+                //}
                 if (File.Exists(imgPath))     // img will be delete as per user desier 
                 {
                     File.Delete(imgPath);

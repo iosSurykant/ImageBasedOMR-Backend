@@ -239,7 +239,7 @@ namespace SQCScanner.Controllers
                         new
                         {
                             userId = empId,
-                            getTokenn = webToken,
+                            getTokenn = webToken.Result,
                             session = model.SessionId
                         }
                     );
@@ -259,7 +259,7 @@ namespace SQCScanner.Controllers
                     {
                         status = true,
                         message = "Verify Successfully",
-                        token = webToken
+                        token = webToken.Result
                     };
                 }
                 return Ok(res);
