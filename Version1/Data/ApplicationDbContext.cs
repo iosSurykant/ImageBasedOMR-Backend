@@ -20,7 +20,6 @@ namespace Version1.Data
         public DbSet<ImgTemp> ImgTemplate { get; set; }
         public DbSet<EmpModel> empModels { get; set; }
         public DbSet<userAuthChecked> LoginTeken { get; set; }
-        
         public DbSet<WalletClass> Wallet { get; set; }
         public DbSet<Transaction> Transaction { get; set; }
         public DbSet<Packages> Packages { get; set; }

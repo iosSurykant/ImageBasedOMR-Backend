@@ -585,7 +585,7 @@ namespace SQCScanner.Controllers
                      
                     if(isExist == null)
                     {
-                        var querry = $"insert into TestCases (TemplateId, TestName, TestId, Notes, status, EmpId, TotalImages) values ('{model.TemplateId}', '{model.testName.Trim()}', '{model.TestId}', '{model.notes}', 'N', '{Empid}', '')";
+                        var querry = $"insert into TestCases (TemplateId, TestName, TestId, Notes, status, EmpId, TotalImages, QuestionRange) values ('{model.TemplateId}', '{model.testName.Trim()}', '{model.TestId}', '{model.notes}', 'N', '{Empid}', '', '0')";
                         _conn.ExecuteAsync(querry);
                         if (!Directory.Exists(directoryPath))
                         {
@@ -674,7 +674,7 @@ namespace SQCScanner.Controllers
 
                     if (isExist == null)
                     {
-                        var querry = $"insert into TestCases (TemplateId, TestName, TestId, Notes, status, EmpId, TotalImages) values ('{model.TemplateId}', '{model.testName.Trim()}', '{testId}', '{model.notes}', 'N', '{Empid}','')";
+                        var querry = $"insert into TestCases (TemplateId, TestName, TestId, Notes, status, EmpId, TotalImages, QuestionRange) values ('{model.TemplateId}', '{model.testName.Trim()}', '{testId}', '{model.notes}', 'N', '{Empid}','', '0')";
                         _conn.ExecuteAsync(querry);
                         if (!Directory.Exists(directoryPath))
                         {

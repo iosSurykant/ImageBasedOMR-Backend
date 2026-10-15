@@ -69,8 +69,6 @@ namespace SQCScanner.Controllers
                     _logger.LogWarning("CreateTemplate failed because no image was provided. TemplateId: {TemplateId}", model.TemplateId);
                     return BadRequest("Template not found.");
                 }
-
-
                 Console.WriteLine(tempExist.Id);
               
 
@@ -88,7 +86,6 @@ namespace SQCScanner.Controllers
                         TemplateImgBase64 = base64String,
                         discription = model.discription,
                     };
-
                     _dbContext.StaticImgClass.Add(templateEntity);
                     await _dbContext.SaveChangesAsync();
 

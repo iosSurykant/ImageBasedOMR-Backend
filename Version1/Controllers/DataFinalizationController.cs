@@ -106,8 +106,10 @@ namespace SQCScanner.Controllers
                         string tableName = dataList[^1].Substring("TableName-".Length);
                         using (var conna = new SqlConnection(conn.GetConnectionString("dbc")))
                         {
-                            var result = conna.QueryAsync($"select * from [{tableName}]");
-                            return Ok(new { records = result, TableName = tableName });
+                            var result = conna.QueryAsync($"select * from [{tableName}]") ;
+                            var res = new { records = result, TableName = tableName };
+                            Console.WriteLine(res);
+                            return Ok(res);
                         }
                     }
                     // Extract Teble n Target 
@@ -149,7 +151,7 @@ namespace SQCScanner.Controllers
                     var data = await context.DataFinalized.FirstOrDefaultAsync(x => x.Sr == model.Sr);
                     if (data != null)
                     {
-                        data.state = isDone ? "Panding" : "Complete";
+                        data.state = isDone ? "Pending" : "Complete";
                         data.Time = time;
                         await context.SaveChangesAsync();
                     }
@@ -168,18 +170,6 @@ namespace SQCScanner.Controllers
             public Dictionary<string, string> data { get; set; } = new();
         }
 
-        [HttpPut("DataFinaledUpdate")]
-        public async Task<IActionResult> DataFinalUpdate(DataFinalizedClass model)
-        {
-            try {
-     
-                return Ok("USE LESS API");
-            }
-            catch(Exception ex)
-            {
-                return StatusCode(400, ex.Message);
-            }
-        }
-
+        
     }
 }

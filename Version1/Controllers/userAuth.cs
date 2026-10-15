@@ -247,9 +247,7 @@ namespace SQCScanner.Controllers
                             var query2 = @$"insert into empModels ([EmpName],[EmpEmail],[password],[contact],[role], [EmpId], [UserOtp],[refranceId],[DateTime]) values('{name}', '{email}','{pwd}', '{cont}', '{role}', {empId}, '{Otp}','{refranceId}', '{ DateTime.Now.ToString("dd:MM:YYYY_HH:mm")}'); 
                             Insert into LoginTokenRec (EmpId) values ('{empId}')";
                             var result2 = await _conn.ExecuteAsync(query2);
-                            
-                            var waletUpdate = await _conn.ExecuteAsync($"insert into Wallet (Uid, TimeDate, CreditLimit) values (@empId, @UpdatedDate, '0')", new { empId = empId, UpdatedDate = DateTime.Now });
-
+                            var waletUpdate = await _conn.ExecuteAsync($"insert into Wallet (Uid, TimeDate, CreditLimit, reneration_results, recognition_credits_total, generation_results_total) values (@empId, @UpdatedDate, '0', 0, 0, 0)", new { empId = empId, UpdatedDate = DateTime.Now });
                             res = new
                             {
                                 state = true,
@@ -330,9 +328,7 @@ namespace SQCScanner.Controllers
                         var isExist = await _conn.QueryFirstOrDefaultAsync($"select * from Wallet where Uid = {empId}");
                         if (isExist == null)
                         {
-                            var waletUpdate = await _conn.ExecuteAsync($"insert into Wa" +
-                                $"llet (Uid, TimeDate, CreditLimit, reneration_results, recognition_credits_total, generation_results_total) values (@empId, @UpdatedDate, '0', 0, 0, 0)", new { empId = empId, UpdatedDate = DateTime.Now });
-                            var dataModule = await _conn.ExecuteAsync($"insert into empModel2 (EmpId) values ('{empId}')");
+                            var waletUpdate = await _conn.ExecuteAsync($"insert into Wallet (Uid, TimeDate, CreditLimit, reneration_results, recognition_credits_total, generation_results_total) values (@empId, @UpdatedDate, '0', 0, 0, 0)", new { empId = empId, UpdatedDate = DateTime.Now });
                         }
                         res = new
                         {
@@ -412,11 +408,7 @@ namespace SQCScanner.Controllers
                 var token1 = "";
                 if (dataFind == null)
                 {
-                    return res = new
-                    {
-                        state = false,
-                        message = "Record Not Found"
-                    };
+                    return NotFound("OTP Not Matched");
                 }
                 if (dataFind.UserOtp == Otp)
                 {

@@ -87,8 +87,8 @@ namespace SQCScanner.Migrations
                     b.Property<int>("TestId")
                         .HasColumnType("int");
 
-                    b.Property<DateOnly>("Time")
-                        .HasColumnType("date");
+                    b.Property<DateTime>("Time")
+                        .HasColumnType("datetime2");
 
                     b.Property<string>("state")
                         .IsRequired()
@@ -196,6 +196,10 @@ namespace SQCScanner.Migrations
                     SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
 
                     b.Property<string>("CreateAt")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("EmpiId")
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
 

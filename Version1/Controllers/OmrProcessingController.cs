@@ -16,6 +16,7 @@ using Dapper;
 using Syncfusion.EJ2.Notifications;
 using ZXing.Aztec.Internal;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata.Internal;
 
 namespace Version1.Controllers
 {
@@ -209,6 +210,13 @@ namespace Version1.Controllers
                                     await _conn.ExecuteAsync($@"update TestCases Set TotalImages = {TotCount} {testStatus} where TestName = '{model.folderPath}'");
                                 }
 
+                                // Remove QC Column on websoket responce.
+                                if (dbRes is Dictionary<string, object> dict && dict.Count > 0)
+                                {
+                                    var lastKey = dict.Keys.Last();
+                                    dict.Remove(lastKey);
+                                }
+                                
                                 // 3. WS_Handler                  - Done
                                 string jsonResult = JsonSerializer.Serialize(dbRes);
                                 userId = Convert.ToString(userId);
@@ -360,16 +368,40 @@ namespace Version1.Controllers
                 var headerLine = await reader.ReadLineAsync();
                 var headers = headerLine.Split(',');
                 var list = await _dbContext.DataFinalized.ToListAsync();
-                var TempList = list.Where(a => a.state == "review" && a.EmpId == int.Parse(userId));
-                return Ok(new {header = headers, Response = TempList });
+                var TempList = list.Where(a => a.state == "review" && a.EmpId == int.Parse(userId)).Select(a=>a.Remark);
+                var resultList = new List<TestHeaderResponse>();
+                using (var _conn = new SqlConnection(_Configuration.GetConnectionString("dbc")))
+                {
+                    _conn.Open();
+                    foreach (var dataR in TempList)
+                    {
+                        string testName = dataR.Split(',').FirstOrDefault(x => x.StartsWith("TestName-"))?.Substring("TestName-".Length);
+                        string templateName = dataR.Split(',').FirstOrDefault(a => a.StartsWith("TableName-"))?.Substring("TableName-".Length);
+                        string queryString = $"SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '{templateName}' ORDER BY ORDINAL_POSITION";
+                        var query = _conn.Query<string>(queryString).ToList();
+                        resultList.Add(new TestHeaderResponse
+                        {
+                            Name = testName,
+                            Headers = query
+                        });
+                    }
+                    _conn.Close();
+                }
 
+                return Ok(new { answer_header = headers, TestCaseData = resultList });
             }
+        }
+
+        public class TestHeaderResponse
+        {
+            public string Name { get; set; }
+            public List<string> Headers { get; set; }
         }
 
         [HttpGet("DataResponce")]
         public async Task<IActionResult> DataResponce(int templateId, int PageNo, int PageSize)
         {
-            string tableName = $"Template_{templateId}";
+            string tableName = $"Tem_{templateId}";
             dynamic res;
             dynamic dataResp = "";
             int value = 0;
