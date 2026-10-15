@@ -11,7 +11,7 @@ namespace SQCScanner.Modal
         public string imgPath { get; set; }
         public string JsonPath { get; set; }
         public string discription { get; set; }
-
+        public string EmpiId { get; set; }
 
     }
 }

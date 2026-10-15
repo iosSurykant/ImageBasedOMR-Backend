@@ -376,12 +376,15 @@ namespace Version1.Controllers
                     foreach (var dataR in TempList)
                     {
                         string testName = dataR.Split(',').FirstOrDefault(x => x.StartsWith("TestName-"))?.Substring("TestName-".Length);
+                        string TableName = dataR.Split(',').FirstOrDefault(x => x.StartsWith("TableName-"))?.Substring("TableName-".Length);
                         string templateName = dataR.Split(',').FirstOrDefault(a => a.StartsWith("TableName-"))?.Substring("TableName-".Length);
                         string queryString = $"SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '{templateName}' ORDER BY ORDINAL_POSITION";
                         var query = _conn.Query<string>(queryString).ToList();
                         resultList.Add(new TestHeaderResponse
                         {
+
                             Name = testName,
+                            fileName = TableName,
                             Headers = query
                         });
                     }
@@ -395,6 +398,7 @@ namespace Version1.Controllers
         public class TestHeaderResponse
         {
             public string Name { get; set; }
+            public string fileName { get; set;}
             public List<string> Headers { get; set; }
         }
 

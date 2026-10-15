@@ -244,7 +244,8 @@ namespace SQCScanner.Controllers
                             // ****   Create OTP -- OPEN     ****
                             var SixOTP = await _emailSendClass.emailRec(email);
                             var Otp = SixOTP.ToString();
-                            var query2 = @$"insert into empModels ([EmpName],[EmpEmail],[password],[contact],[role], [EmpId], [UserOtp],[refranceId],[DateTime]) values('{name}', '{email}','{pwd}', '{cont}', '{role}', {empId}, '{Otp}','{refranceId}', '{ DateTime.Now.ToString("dd:MM:YYYY_HH:mm")}'); 
+                            DateTime date = DateTime.Now;
+                            var query2 = @$"insert into empModels ([EmpName],[EmpEmail],[password],[contact],[role], [EmpId], [UserOtp],[refranceId],[DateTime]) values('{name}', '{email}','{pwd}', '{cont}', '{role}', {empId}, '{Otp}','{refranceId}', '{date.ToString()}'); 
                             Insert into LoginTokenRec (EmpId) values ('{empId}')";
                             var result2 = await _conn.ExecuteAsync(query2);
                             var waletUpdate = await _conn.ExecuteAsync($"insert into Wallet (Uid, TimeDate, CreditLimit, reneration_results, recognition_credits_total, generation_results_total) values (@empId, @UpdatedDate, '0', 0, 0, 0)", new { empId = empId, UpdatedDate = DateTime.Now });
@@ -320,7 +321,7 @@ namespace SQCScanner.Controllers
                             IsLoggedIn = false,
                             UserOtp = SixOTP,
                             RefranceId = RefranceId,
-                            DateTime = DateTime.Now.ToString("dd:MM:yyyy_HH:mm")
+                            DateTime = DateTime.Now.ToString()
                         };
                         var data = _DbContext.empModels.Add(emailRec);
                         await _DbContext.SaveChangesAsync();
@@ -467,29 +468,40 @@ namespace SQCScanner.Controllers
         public async Task<IActionResult> GetList(getList model)
         {
             dynamic res;
-            try {
+
+            var getToken = Request.Headers["Authorization"].FirstOrDefault()?.Replace("Bearer ", "").Trim();
+            var tokenHandler = new JwtSecurityTokenHandler();
+            var jwtToken = tokenHandler.ReadJwtToken(getToken);
+            var userId = jwtToken.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier || c.Type == "nameid")?.Value;
+            var userName = jwtToken.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier || c.Type == "unique_name")?.Value;
+            string UserEmail = jwtToken.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier || c.Type == "email")?.Value;
+            string UserRole = jwtToken.Claims.FirstOrDefault(a => a.Type == ClaimTypes.NameIdentifier || a.Type == "role")?.Value;
+
+
+            try
+            {
                 var empList = _DbContext.empModels.AsQueryable();
-                if (model.referenceId == "")
+                if (UserRole == "superadmin")
                 {
-                    // return all records
                     empList = _DbContext.empModels.AsQueryable();
                 }
                 else
                 {
                     empList = _DbContext.empModels.AsQueryable().Where(reff=>reff.RefranceId==model.referenceId);
-                    if (!string.IsNullOrWhiteSpace(model.role))
-                    {
-                        empList = empList.Where(rol => rol.role == model.role);
-                    }
-                    if (!string.IsNullOrWhiteSpace(model.search))
-                    {
-                        empList = empList.Where(x => x.EmpEmail.Contains(model.search) || x.EmpName.Contains(model.search));
-                    }
-                    if (!string.IsNullOrWhiteSpace(model.isLogg))
-                    {
-                        bool isLoggedIn = bool.Parse(model.isLogg);
-                        empList = empList.Where(x => x.IsLoggedIn == isLoggedIn);
-                    }
+                }
+
+                if (!string.IsNullOrWhiteSpace(model.role))
+                {
+                    empList = empList.Where(rol => rol.role == model.role);
+                }
+                if (!string.IsNullOrWhiteSpace(model.search))
+                {
+                    empList = empList.Where(x => x.EmpEmail.Contains(model.search) || x.EmpName.Contains(model.search));
+                }
+                if (!string.IsNullOrWhiteSpace(model.isLogg))
+                {
+                    bool isLoggedIn = bool.Parse(model.isLogg);
+                    empList = empList.Where(x => x.IsLoggedIn == isLoggedIn);
                 }
 
                 var records = empList.OrderBy(x => x.Id).Skip((model.PageNumber - 1) * model.range).Take(model.range).ToList();

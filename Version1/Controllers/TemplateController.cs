@@ -27,6 +27,8 @@ using static System.Runtime.InteropServices.JavaScript.JSType;
 using static OpenCvSharp.XImgProc.CvXImgProc;
 using SharpCompress.Archives;
 using Microsoft.Extensions.Logging;
+using System.Security.Claims;
+using Org.BouncyCastle.Ocsp;
 
 namespace SQCScanner.Controllers
 {
@@ -145,7 +147,8 @@ namespace SQCScanner.Controllers
                                     imgPath = relativeImgPath,
                                     JsonPath = "",
                                     CreateAt = date.ToString(),
-                                    discription = description
+                                    discription = description,
+                                    EmpiId = empId
                                 });
 
                                 await _dbContext.SaveChangesAsync();
@@ -278,7 +281,55 @@ namespace SQCScanner.Controllers
             dynamic res;
             try
             {
-                var results = await _dbContext.ImgTemplate.ToListAsync();
+
+                var getToken = Request.Headers["Authorization"].FirstOrDefault()?.Replace("Bearer ", "").Trim();
+                var tokenHandler = new JwtSecurityTokenHandler();
+                var jwtToken = tokenHandler.ReadJwtToken(getToken);
+                var userId = jwtToken.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier || c.Type == "nameid")?.Value;
+                var userName = jwtToken.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier || c.Type == "unique_name")?.Value;
+                string UserEmail = jwtToken.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier || c.Type == "email")?.Value;
+                string UserRole = jwtToken.Claims.FirstOrDefault(a => a.Type == ClaimTypes.NameIdentifier || a.Type == "role")?.Value;
+
+                string refranceId = jwtToken.Claims.FirstOrDefault(a => a.Type == ClaimTypes.NameIdentifier || a.Type == "refranceId")?.Value;
+
+                
+                List<ImgTemp> results;
+                //List<EmpModel> empList;
+
+                //var empList = _dbContext.empModels.FirstOrDefaultAsync(reff => reff.RefranceId == refranceId);
+                var emp = await _dbContext.empModels.FirstOrDefaultAsync(e => e.RefranceId == refranceId);
+
+                results = await _dbContext.ImgTemplate.ToListAsync();
+
+                if (UserRole == "superadmin")
+                {
+                    results = await _dbContext.ImgTemplate.ToListAsync();
+                }
+                else if (UserRole == "admin")
+                {
+                    //results = await results.Where(a=>a.EmpiId== empList.EmpId).ToListAsync();
+                    // Admin ke RefranceId se employee find karein
+                    //if (emp != null)
+                    //{
+                    //    var empIds = await _dbContext.empModels.Where(e => e.RefranceId == refranceId).Select(e => e.EmpId).ToListAsync();
+                    //    results = await _dbContext.ImgTemplate.Where(a => a.EmpiId == emp.EmpId).ToListAsync();
+                    //}
+                    //else
+                    //{
+                    //    results = new List<ImgTemp>();
+                    //}
+
+                    // Same RefranceId wale sabhi employees ki EmpId
+                    var empIds = await _dbContext.empModels.Where(e => e.RefranceId == refranceId).Select(e => e.EmpId).ToListAsync();
+                    // Un sabhi employees ke templates
+                    results = await _dbContext.ImgTemplate.Where(a => empIds.Contains(a.EmpiId)).ToListAsync();
+
+                }
+                else {
+                    results = await _dbContext.ImgTemplate.Where(a=>a.EmpiId == UserEmail).ToListAsync();
+                }
+
+
                 if (results.Count == null || results.Count == 0)
                 {
                     res = new
