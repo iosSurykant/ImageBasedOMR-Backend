@@ -74,13 +74,6 @@ namespace Version1.Controllers
             dynamic resp;
             _controlService.ResetProcessing();
             model.failReScan = false;
-            //var getToken = Request.Headers["Authorization"].FirstOrDefault()?.Replace("Bearer ", "").Trim();
-            //if (string.IsNullOrWhiteSpace(getToken))
-            //{
-            //    return Unauthorized(new { message = "No token provided" });
-            //}
-
-            // Token handler UserId Extract
             var tokenHandler = new JwtSecurityTokenHandler();
             var jwtToken = tokenHandler.ReadJwtToken(model.Token);
             var userId = jwtToken.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier || c.Type == "nameid")?.Value;
@@ -91,16 +84,6 @@ namespace Version1.Controllers
             string folderPAth = "" ;
             folderPath = Path.Combine(userId, model.folderPath);
             int TestId = 0;
-            //using (var conn = new SqlConnection(_Configuration.GetConnectionString("dbc")))
-            //{
-            //    conn.OpenAsync();
-            //    string query = $"select Sr from TestCases where TestName = @path";
-            //    var test = await conn.QueryAsync<int>(query, new {path = model.folderPath});
-            //    foreach(var a in test)
-            //    {
-            //        model.testId = a;
-            //    }
-            //}
             using (var conn = new SqlConnection(_Configuration.GetConnectionString("dbc")))
             {
                 await conn.OpenAsync();
@@ -115,7 +98,6 @@ namespace Version1.Controllers
                     break;
                 }
             }
-
 
             // Y/N = ReScan failure Img Folder.
             var sharefolder = "";
@@ -133,7 +115,7 @@ namespace Version1.Controllers
             }
             else
             {
-                var imageFiles = Directory.GetFiles(folderPath, "*.*").Where(f => f.EndsWith(".jpg") || f.EndsWith(".png") || f.EndsWith(".jpeg") || f.EndsWith(".tif")).ToList();
+                var imageFiles = Directory.GetFiles(folderPath, "*.*").Where(f => f.EndsWith(".jpg") || f.EndsWith(".png") || f.EndsWith(".jpeg") || f.EndsWith(".bmp") || f.EndsWith(".tif")).ToList();
                 var Targetjson = string.Empty;
                 var ReturnDetails = _dbContext.ImgTemplate.FirstOrDefault(x => x.Id == model.idTemp);
                 Console.WriteLine(ReturnDetails);

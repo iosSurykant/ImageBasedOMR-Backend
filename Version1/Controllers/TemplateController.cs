@@ -29,6 +29,14 @@ using SharpCompress.Archives;
 using Microsoft.Extensions.Logging;
 using System.Security.Claims;
 using Org.BouncyCastle.Ocsp;
+using DocumentFormat.OpenXml.Spreadsheet;
+using System.Collections.Generic;
+using DocumentFormat.OpenXml.Office2010.Excel;
+using DocumentFormat.OpenXml;
+using System.Linq;
+using static OpenCvSharp.Stitcher;
+using SQCScanner.Modal.DataFinalaization;
+using SQCScanner.Modal.CustomTemplate;
 
 namespace SQCScanner.Controllers
 {
@@ -45,6 +53,7 @@ namespace SQCScanner.Controllers
         private readonly string _connectionString;
         private readonly string _root = Environment.CurrentDirectory + "/wFileManager";
         private readonly WebSoketHandler _webSocketHandler;
+        private readonly IHostedService _hosted;
 
         public TemplateController(IWebHostEnvironment env, ApplicationDbContext dbContext, ILogger<TemplateController> logger, IConfiguration configuration, WebSoketHandler webSocketHandler)
         {
@@ -117,7 +126,8 @@ namespace SQCScanner.Controllers
                                 _logger.LogInformation("ImageManager folder created.");
                             }
 
-                            string ImgfileName = Path.GetFileName(ImgTemp.FileName);
+                            string ImgfileName = DateTime.Now.ToString("yyyyMMddHHmmssfff") + "_" + Path.GetFileName(ImgTemp.FileName);
+
 
                             string filePath = Path.Combine(uploadsFolder, ImgfileName);
 
@@ -276,61 +286,124 @@ namespace SQCScanner.Controllers
         // DONE - -
         [HttpGet]
         [Route("List_ImeTemp")]
-        public async Task<IActionResult> getImgTemp()
+        public async Task<IActionResult> getImgTemp([FromQuery] int Range=0, [FromQuery] int pageNo=0)
         {
             dynamic res;
             try
             {
-
                 var getToken = Request.Headers["Authorization"].FirstOrDefault()?.Replace("Bearer ", "").Trim();
                 var tokenHandler = new JwtSecurityTokenHandler();
                 var jwtToken = tokenHandler.ReadJwtToken(getToken);
-                var userId = jwtToken.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier || c.Type == "nameid")?.Value;
+                string userId = jwtToken.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier || c.Type == "nameid")?.Value;
                 var userName = jwtToken.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier || c.Type == "unique_name")?.Value;
                 string UserEmail = jwtToken.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier || c.Type == "email")?.Value;
                 string UserRole = jwtToken.Claims.FirstOrDefault(a => a.Type == ClaimTypes.NameIdentifier || a.Type == "role")?.Value;
-
                 string refranceId = jwtToken.Claims.FirstOrDefault(a => a.Type == ClaimTypes.NameIdentifier || a.Type == "refranceId")?.Value;
-
                 
-                List<ImgTemp> results;
-                //List<EmpModel> empList;
+                int count = 0;
+                List<getEmpRecords> empRec = new List<getEmpRecords>(); // Responce Body
+                
+                List<ImgTemp> results = await _dbContext.ImgTemplate.ToListAsync();
+                var empIds = await _dbContext.empModels.Where(e => e.RefranceId == refranceId).Select(e => e.EmpId).ToListAsync();
 
-                //var empList = _dbContext.empModels.FirstOrDefaultAsync(reff => reff.RefranceId == refranceId);
-                var emp = await _dbContext.empModels.FirstOrDefaultAsync(e => e.RefranceId == refranceId);
+                //List<TempDesignClass> customData = _dbContext.staticImgDesigns.Where(a=>a.EmpId==empIds.Contains(a.EmpId).ToListAsync();
 
-                results = await _dbContext.ImgTemplate.ToListAsync();
+                List<TempDesignClass> customData = new List<TempDesignClass>();
+                if (UserRole != "superadmin")
+                {
+                    customData = await _dbContext.staticImgDesigns.Where(a => empIds.Contains(a.EmpId)).ToListAsync();
+                }
+                else
+                {
+                    customData = await _dbContext.staticImgDesigns.ToListAsync();
+                }
 
+                // 
+                List<int> templateId = new List<int>();
+                foreach(var data in customData)
+                {
+                    templateId.Add(data.TemplateId??0);
+                }
+                List<ImgTemp> dataFilter = results.Where(a => !templateId.Contains(a.Id)).ToList();
                 if (UserRole == "superadmin")
                 {
-                    results = await _dbContext.ImgTemplate.ToListAsync();
+
+                    // problem 28 hia kyoki kuch data jo dataFilter me hai wo emp list me ni hai matlab emp delete hai 
+                    var query = dataFilter
+                        .Join(
+                            _dbContext.empModels,
+                            a => a.EmpiId,
+                            b => b.EmpId,
+                            (a, b) => new getEmpRecords
+                            {
+                                CreateAt = a.CreateAt,
+                                discription = a.discription,
+                                FileName = a.FileName,
+                                Id = a.Id,
+                                imgPath = a.imgPath,
+                                JsonPath = a.JsonPath,
+                                EmpId = a.EmpiId,
+                                role = b.role,
+                                empEmail = b.EmpEmail,
+                                empName = b.EmpName
+                            });
+                    count = query.Count();
+
+
+
+                    // Pagination
+                    if (Range==0 && pageNo==0)
+                    {
+                        empRec = query.OrderByDescending(x => x.CreateAt).ToList();
+                    }
+                    else
+                    {
+                        empRec = query.OrderByDescending(x => x.CreateAt).Skip((pageNo - 1) * Range).Take(Range).ToList();
+                    }
                 }
-                else if (UserRole == "admin")
+                else 
                 {
-                    //results = await results.Where(a=>a.EmpiId== empList.EmpId).ToListAsync();
-                    // Admin ke RefranceId se employee find karein
-                    //if (emp != null)
-                    //{
-                    //    var empIds = await _dbContext.empModels.Where(e => e.RefranceId == refranceId).Select(e => e.EmpId).ToListAsync();
-                    //    results = await _dbContext.ImgTemplate.Where(a => a.EmpiId == emp.EmpId).ToListAsync();
-                    //}
-                    //else
-                    //{
-                    //    results = new List<ImgTemp>();
-                    //}
+                    var query = dataFilter
+                        .Where(a => empIds.Contains(a.EmpiId))
+                        .Join(
+                            _dbContext.empModels,
+                            a => a.EmpiId,
+                            b => b.EmpId,
+                            (a, b) => new getEmpRecords
+                            {
+                                CreateAt = a.CreateAt,
+                                discription = a.discription,
+                                FileName = a.FileName,
+                                Id = a.Id,
+                                imgPath = a.imgPath,
+                                JsonPath = a.JsonPath,
+                                role = b.role,
+                                EmpId = a.EmpiId,
+                                empEmail = b.EmpEmail,
+                                empName = b.EmpName
+                            });
 
-                    // Same RefranceId wale sabhi employees ki EmpId
-                    var empIds = await _dbContext.empModels.Where(e => e.RefranceId == refranceId).Select(e => e.EmpId).ToListAsync();
-                    // Un sabhi employees ke templates
-                    results = await _dbContext.ImgTemplate.Where(a => empIds.Contains(a.EmpiId)).ToListAsync();
+                    count =  query.Count();
 
+                    if (Range == 0 && pageNo == 0)
+                    {
+                        empRec = query
+                        .OrderByDescending(a => a.CreateAt)
+                        .ThenByDescending(a => a.Id)
+                        .ToList();
+                    }
+                    else
+                    {
+                        empRec = query
+                        .OrderByDescending(a => a.CreateAt)
+                        .ThenByDescending(a => a.Id)
+                        .Skip((pageNo - 1) * Range)
+                        .Take(Range)
+                        .ToList();
+                    }
                 }
-                else {
-                    results = await _dbContext.ImgTemplate.Where(a=>a.EmpiId == UserEmail).ToListAsync();
-                }
 
-
-                if (results.Count == null || results.Count == 0)
+                if (empRec.Count == null || empRec.Count == 0)
                 {
                     res = new
                     {
@@ -340,7 +413,7 @@ namespace SQCScanner.Controllers
                 }
                 else
                 {
-                    foreach (var item in results)
+                    foreach (var item in empRec)
                     {
                         if (!string.IsNullOrEmpty(item.imgPath))
                         {
@@ -355,7 +428,8 @@ namespace SQCScanner.Controllers
                     {
                         state = true,
                         message = "Record Found",
-                        body = results
+                        body = empRec,
+                        count
                     };
                 }
             }
@@ -376,6 +450,20 @@ namespace SQCScanner.Controllers
             {
                 return NotFound(res);
             }
+        }
+        public class getEmpRecords
+        {
+            public int? Id { get; set; } = 0;
+            public string? EmpId { get; set; } = "";
+            public string? empName { get; set; } = "";
+            public string? empEmail { get; set; } = "";
+            public string? role { get; set; } = "";
+            public string? CreateAt { get; set; } = "";
+            public string? FileName { get; set; } = "";
+            public string? imgPath { get; set; } = "";
+            public string? JsonPath { get; set; } = "";
+            public string? discription { get; set; } = "";
+            public string? EmpiId { get; set; } = "";
         }
 
         [HttpDelete]
@@ -621,7 +709,6 @@ namespace SQCScanner.Controllers
                 {
                     int tempId = Convert.ToInt32(model.TemplateId);
                     var data = _dbContext.ImgTemplate.FirstOrDefault(x => x.Id == tempId);
-                    Console.WriteLine();
                     if (!string.IsNullOrEmpty(data.JsonPath) == null && data.JsonPath == "")
                     {
                         BadRequest("Template not Found");
@@ -672,7 +759,6 @@ namespace SQCScanner.Controllers
             {
                 res = new { state = false, message = ex.Message };
             }
-
             return Ok(res);
         }
 
@@ -712,10 +798,6 @@ namespace SQCScanner.Controllers
                         BadRequest("Template not Found");
                     }
                 }
-
-               
-
-
                 using (var _conn = new SqlConnection(_connectionString))
                 {
                     await _conn.OpenAsync();
@@ -725,7 +807,7 @@ namespace SQCScanner.Controllers
 
                     if (isExist == null)
                     {
-                        var querry = $"insert into TestCases (TemplateId, TestName, TestId, Notes, status, EmpId, TotalImages, QuestionRange) values ('{model.TemplateId}', '{model.testName.Trim()}', '{testId}', '{model.notes}', 'N', '{Empid}','', '0')";
+                        var querry = $"insert into TestCases (TemplateId, TestName, TestId, Notes, status, EmpId, TotalImages, QuestionRange) values ('{model.TemplateId}', '{model.testName.Trim()}', '{testId}', '{model.notes}', 'N', '{Empid}','0', '0')";
                         _conn.ExecuteAsync(querry);
                         if (!Directory.Exists(directoryPath))
                         {
@@ -787,8 +869,7 @@ namespace SQCScanner.Controllers
 
                     if (!string.IsNullOrEmpty(model.search))
                     {
-                        string search = model.search.ToLower();
-
+                        string search = model.search.ToLower(); 
                         data = data.Where(x =>
                             (!string.IsNullOrEmpty(x.TestId) && x.TestId.ToLower().Contains(search)) ||
                             (!string.IsNullOrEmpty(x.testName) && x.testName.ToLower().Contains(search))
@@ -824,7 +905,6 @@ namespace SQCScanner.Controllers
 
             return Ok(res);
         }
-
         public class ListCount
         {
             public int page { get; set; }
@@ -847,24 +927,48 @@ namespace SQCScanner.Controllers
                 var handler = new JwtSecurityTokenHandler();
                 var TokenDecription = handler.ReadJwtToken(getToken);
                 var Empid = TokenDecription.Claims.FirstOrDefault(c => c.Type == "nameid")?.Value;
+                var EmpRole = TokenDecription.Claims.FirstOrDefault(c => c.Type == "role")?.Value;
+                var EmpReffranceId = TokenDecription.Claims.FirstOrDefault(c => c.Type == "refranceId")?.Value;
+
 
 
                 using (var _conn = new SqlConnection(_connectionString))
                 {
                     _conn.Open();
 
-                    string query = $"SELECT * FROM TestCases where EmpId={Empid} Order by Sr DESC";
-
-                    var data = await _conn.QueryAsync<TestCreate>(query);
-                    var totalcount = data.Count();
-                    if (!string.IsNullOrEmpty(model.search))
+                    List<TestCreate> TempData = new List<TestCreate>();
+                    dynamic data;
+                    int totalcount = 0;
+                    if (EmpRole == "admin")
                     {
-                        string search = model.search.ToLower();
-                        data = data.Where(x => (!string.IsNullOrEmpty(x.TestId) && x.TestId.ToLower().Contains(search)) || (!string.IsNullOrEmpty(x.testName) && x.testName.ToLower().Contains(search)));
+                        var empList = _dbContext.empModels.AsQueryable().Where(x => x.RefranceId == EmpReffranceId).ToList();
+                        Console.WriteLine(empList);
+
+                        foreach (var empId in empList)
+                        {
+                            string queryData = $"SELECT * FROM TestCases where EmpId={Empid} Order by Sr DESC";
+                            data = await _conn.QueryAsync<TestCreate>(queryData);
+                            TempData.AddRange(data);
+                        }
+                        totalcount = TempData.Count;
                     }
                     else
                     {
-                        data = data.OrderByDescending(x => x.Sr).Skip((model.page - 1) * model.range).Take(model.range);
+                        string query = $"SELECT * FROM TestCases where EmpId={Empid} Order by Sr DESC";
+                        data = await _conn.QueryAsync<TestCreate>(query);
+                        totalcount = TempData.Count;
+                        TempData = data;
+                    }
+
+
+                    if (!string.IsNullOrEmpty(model.search))
+                    {
+                        string search = model.search.ToLower();
+                        data = TempData.Where(x => (!string.IsNullOrEmpty(x.TestId) && x.TestId.ToLower().Contains(search)) || (!string.IsNullOrEmpty(x.testName) && x.testName.ToLower().Contains(search)));
+                    }
+                    else
+                    {
+                        data = TempData.OrderByDescending(x => x.Sr).Skip((model.page - 1) * model.range).Take(model.range);
                     }
 
                     res = new
@@ -874,6 +978,7 @@ namespace SQCScanner.Controllers
                         Record = data,
                         count = totalcount
                     };
+                    
 
                     _conn.Close();
                 }
@@ -883,16 +988,15 @@ namespace SQCScanner.Controllers
                 res = new
                 {
                     state = false,
-                    Message = ex.Message
+                    ex.Message
                 };
             }
-
             return Ok(res);
         }
 
         [HttpDelete]
         [Route("DeleteTest")]
-        public async Task<IActionResult> DeleteTest(string testId)
+        public async Task<IActionResult> DeleteTest([FromQuery] string testId)
         {
             dynamic res;
             try
@@ -913,7 +1017,7 @@ namespace SQCScanner.Controllers
                         directoryPath = Path.Combine(_root, Empid, dataTest.testName);
                         if (Directory.Exists(directoryPath))
                         {
-                            Directory.Delete(directoryPath);
+                            Directory.Delete(directoryPath, true);
                             res = new { state = true, message = $"'{dataTest.testName}' Test and his Images deleted successfully" };
                         }
                         else
@@ -946,25 +1050,40 @@ namespace SQCScanner.Controllers
                 using (var _conn = new SqlConnection(_connectionString))
                 {
                     _conn.Open();
-                    var isExist = _conn.ExecuteScalar<int>($"select COUNT(1) from TestCases where TestId = '{model.TestId}'");
-                    if (isExist > 0)
+                    //var isExist = _conn.Query($"select * from TestCases where TestId = '{model.TestId}'").FirstOrDefault();
+
+
+                    var isExistA = _conn.Query($"select * from TestCases ").ToList();
+                    var isExist = isExistA.Where(a => a.TestId == model.TestId).FirstOrDefault();
+                    Console.WriteLine(isExist);
+                    var dictionary = (IDictionary<string, object>)isExist;
+                    var status = dictionary["status"]?.ToString();
+                    if (status == "Y")
                     {
+                        return BadRequest(new { Status = false, Message = "in this test case image has been already uplaoded" });
+                    }
+                    if (isExist != null)
+                    {
+                        var extistdata = isExistA.Where(a => a.TestName == model.testName);
                         var qurry = $"update TestCases set TemplateId = '{model.TemplateId}', TestName = '{model.testName.Trim()}', Notes = '{model.notes}', [status] = '{model.status}' where TestId = '{model.TestId}'";
                         _conn.Execute(qurry);
                         res = new { state = true, message = "Test updated successfully" };
                         _conn.Close();
+                        return Ok(new { state = false, message = "Test not found" });
                     }
-                    else
+                    else 
                     {
-                        res = new { state = false, message = "Test not found" };
+                        return NotFound(new {
+                            state = false,
+                            message = "Test not found"
+                        });
                     }
                 }
             }
             catch (Exception ex)
             {
-                res = new { state = false, message = ex.Message };
+                return StatusCode(500, ex.Message);
             }
-            return Ok(res);
         }
         public class TestCreate
         {
@@ -1009,7 +1128,7 @@ namespace SQCScanner.Controllers
                 if (file == null || file.Length == 0)
                     continue;
 
-                string fileName = $"OMRIOS_{file.FileName}";
+                string fileName = file.FileName;
 
                 string filePath = Path.Combine(directoryPath, fileName);
                 using (var stream = new FileStream(filePath, FileMode.Create))
@@ -1098,7 +1217,7 @@ namespace SQCScanner.Controllers
                 using (var conn = new SqlConnection(_connectionString))
                 {
                     conn.Open();
-                    dataTest = conn.QueryFirstOrDefault<TestCreate>(@"SELECT * FROM TestCases WHERE TestName = @TestName", new { TestName });
+                    dataTest = await conn.QueryFirstOrDefaultAsync<TestCreate>(@"SELECT * FROM TestCases WHERE TestName = @TestName", new { TestName });
                     conn.Close();
                 }
 
@@ -1108,6 +1227,14 @@ namespace SQCScanner.Controllers
                     {
                         success = false,
                         message = $"Test '{TestName}' not found."
+                    });
+                }
+                if (dataTest.status == "Y")
+                {
+                    return BadRequest(new
+                    {
+                        success = false,
+                        message = $"Test '{TestName}' have already uplaoded imagees"
                     });
                 }
 
@@ -1163,16 +1290,16 @@ namespace SQCScanner.Controllers
 
 
                     // Generate a SHORT safe filename
-                    string fileName =
-                        $"OMRIOS_{Guid.NewGuid():N}{extension}";
+                    //string fileName =
+                    //    $"OMRIOS_{Guid.NewGuid():N}{extension}";
 
                     string filePath = Path.Combine(
                         directoryPath,
-                        fileName
+                        originalFileName
                     );
 
                     Console.WriteLine($"Original File : {originalFileName}");
-                    Console.WriteLine($"Saving File   : {fileName}");
+                    Console.WriteLine($"Saving File   : {originalFileName}");
                     Console.WriteLine($"Full Path     : {filePath}");
 
                     // -----------------------------------------
@@ -1196,7 +1323,7 @@ namespace SQCScanner.Controllers
                     // -----------------------------------------
                     var uploadedFile = new
                     {
-                        type = $"{fileName} Image file uploaded successfully",
+                        type = $"{originalFileName} Image file uploaded successfully",
                         path = filePath,
                         uploadedCount = uploadedCount,
                         totalFiles = files.Count
@@ -1212,7 +1339,7 @@ namespace SQCScanner.Controllers
                         {
                             conn.Open();
                             var qry = "UPDATE TestCases SET status = @Status, TotalImages = @TotalImg  WHERE TestName = @TestNames";
-                            conn.Execute(qry, new
+                            await conn.ExecuteAsync(qry, new
                             {
                                 Status = "Y",
                                 TestNames = TestName,
@@ -1253,7 +1380,7 @@ namespace SQCScanner.Controllers
         [HttpPost("upload")]
         public async Task<IActionResult> UploadArchiveFiles(List<IFormFile> files, string TestName)
         {
-            _logger.LogInformation("UploadArchiveFiles execution started for TestName: {TestName}", TestName);
+             _logger.LogInformation("UploadArchiveFiles execution started for TestName: {TestName}", TestName);
             TestName = TestName.Trim();
             try
             {
@@ -1304,8 +1431,7 @@ namespace SQCScanner.Controllers
                 var handler = new JwtSecurityTokenHandler();
                 var tokenDescription = handler.ReadJwtToken(token);
 
-                var empId = tokenDescription.Claims
-                    .FirstOrDefault(c => c.Type == "nameid")
+                var empId = tokenDescription.Claims.FirstOrDefault(c => c.Type == "nameid")
                     ?.Value;
 
                 if (string.IsNullOrWhiteSpace(empId))
@@ -1325,12 +1451,20 @@ namespace SQCScanner.Controllers
                         @"SELECT * FROM TestCases WHERE TestName = @TestName", new { TestName });
                     conn.Close();
                 }
-                Console.WriteLine(dataTest);
 
                 if (dataTest == null)
                 {
                     _logger.LogWarning("TestName: {TestName} not found in TestCases table.", TestName);
                     return NotFound(new { success = false, message = $"Test '{TestName}' not found." });
+                }
+
+                if (dataTest.status == "Y")
+                {
+                    return BadRequest(new
+                    {
+                        success = false,
+                        message = $"Test '{TestName}' have already uplaoded imagees"
+                    });
                 }
 
                 // ---------------------------------------------
@@ -1374,7 +1508,7 @@ namespace SQCScanner.Controllers
                                 TotalImg = archive.Entries.Count()-1;
                                 if (allowedImageExtensions.Contains(extension))
                                 {
-                                    string newFileName = $"OMRIOS_{Guid.NewGuid():N}{extension}";
+                                    string newFileName = originalFileName;
                                     string filePath = Path.Combine(directoryPath, newFileName);
 
                                     await using (var entryStream = entry.OpenEntryStream())
@@ -1450,6 +1584,41 @@ namespace SQCScanner.Controllers
                     error = ex.Message
                 });
             }
+        }
+
+
+        [HttpGet]
+        [Route("TestIamges")]
+        public async Task<IActionResult> TestIamges([FromQuery] string TestName)
+        {
+            string directoryPath = "";
+            var getToken = Request.Headers["Authorization"].FirstOrDefault()?.Replace("Bearer ", "").Trim();
+            var handler = new JwtSecurityTokenHandler();
+            var TokenDecription = handler.ReadJwtToken(getToken);
+            var Empid = TokenDecription.Claims.FirstOrDefault(c => c.Type == "nameid")?.Value;
+            string getDirectory = $"{_env.ContentRootPath}/wFileManager/{Empid}/{TestName}";
+            if (!Directory.Exists(getDirectory))
+            {
+                return BadRequest("Directory not found");
+            }
+            string[] imagePath = Directory.GetDirectories(getDirectory);
+            var imageFiles = Directory.GetFiles(getDirectory, "*.*").Where(f => f.EndsWith(".jpg") || f.EndsWith(".png") || f.EndsWith(".jpeg") || f.EndsWith(".bmp") || f.EndsWith(".tif")).ToList();
+            List<string> filepath = new List<string>();
+
+            if (imageFiles.Count == 0)
+            {
+                return BadRequest("Images Not Found");
+            }
+
+            foreach (var path in imageFiles)
+            {
+                string searchText = "Version1";
+                int index = path.IndexOf(searchText);
+                string result = index >= 0 ? path.Substring(index + searchText.Length).TrimStart('/', '\\') : "";
+                filepath.Add(result);
+                break;
+            }
+            return Ok(filepath);
         }
 
     }

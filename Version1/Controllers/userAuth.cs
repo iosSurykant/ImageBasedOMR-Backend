@@ -98,8 +98,11 @@ namespace SQCScanner.Controllers
                 var role2 = jwtToken2.Claims.FirstOrDefault(c => c.Type == "role")?.Value;
                 var expiryTimeUtc1 = jwtToken.ValidFrom.ToLocalTime();
                 string expiryTimeUtc2 = jwtToken.ValidTo.ToLocalTime().ToString("dd-MM-yyyy HH:mm:ss");
-                qurry = $@"update LoginTokenRec set isLoggedIn='0' where EmpId = {EmpId2}";
-                var result = await _conn.ExecuteAsync(qurry);
+                qurry = $@"update LoginTokenRec set isLoggedIn='0' where EmpId = {EmpId2}; update empModels set isLoggedIn= 0 where EmpId = {EmpId2}";
+                int result = await _conn.ExecuteAsync(
+                    qurry,
+                    new { EmpId = EmpId2 }
+                );
                 res = new
                 {
                     state = true,
@@ -183,7 +186,7 @@ namespace SQCScanner.Controllers
 
         // Add API --  
         [HttpPost("SignUp")]
-        public async Task<IActionResult> Add(string name, string email, string pwd, string cont, string role, string ?refranceId)
+        public async Task<IActionResult> Add(string name, string email, string cont, string role, string ?refranceId)
         {
             dynamic res;
             try {
@@ -201,11 +204,6 @@ namespace SQCScanner.Controllers
                     if (string.IsNullOrEmpty(email))
                     {
                         sb.Append("Email, ");
-                        isEmt = true;
-                    }
-                    if (string.IsNullOrEmpty(pwd))
-                    {
-                        sb.Append("Password, ");
                         isEmt = true;
                     }
                     if (string.IsNullOrEmpty(cont))
@@ -245,7 +243,7 @@ namespace SQCScanner.Controllers
                             var SixOTP = await _emailSendClass.emailRec(email);
                             var Otp = SixOTP.ToString();
                             DateTime date = DateTime.Now;
-                            var query2 = @$"insert into empModels ([EmpName],[EmpEmail],[password],[contact],[role], [EmpId], [UserOtp],[refranceId],[DateTime]) values('{name}', '{email}','{pwd}', '{cont}', '{role}', {empId}, '{Otp}','{refranceId}', '{date.ToString()}'); 
+                            var query2 = @$"insert into empModels ([EmpName],[EmpEmail],[password],[contact],[role], [EmpId], [UserOtp],[refranceId],[DateTime]) values('{name}', '{email}','STPI', '{cont}', '{role}', {empId}, '{Otp}','{refranceId}', '{date.ToString()}'); 
                             Insert into LoginTokenRec (EmpId) values ('{empId}')";
                             var result2 = await _conn.ExecuteAsync(query2);
                             var waletUpdate = await _conn.ExecuteAsync($"insert into Wallet (Uid, TimeDate, CreditLimit, reneration_results, recognition_credits_total, generation_results_total) values (@empId, @UpdatedDate, '0', 0, 0, 0)", new { empId = empId, UpdatedDate = DateTime.Now });
@@ -317,7 +315,7 @@ namespace SQCScanner.Controllers
                             EmpEmail = email,
                             password = "STPI",
                             contact = cont,
-                            role = "admin",
+                            role = "superadmin",
                             IsLoggedIn = false,
                             UserOtp = SixOTP,
                             RefranceId = RefranceId,
@@ -448,7 +446,7 @@ namespace SQCScanner.Controllers
                     string expiryTimeUtc2 = jwtToken.ValidTo.ToLocalTime().ToString("dd-MM-yyyy HH:mm:ss");
                     qurry = $@"update LoginTokenRec set Token='{TokenMain}',Expiry='{expiryTimeUtc2}',Role='{role}', isLoggedIn=1 where EmpId = {EmpId}";
                     var result = await _conn.ExecuteAsync(qurry);
-                }
+                    }
             }
             catch (Exception Ex)
             {
@@ -477,17 +475,19 @@ namespace SQCScanner.Controllers
             string UserEmail = jwtToken.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier || c.Type == "email")?.Value;
             string UserRole = jwtToken.Claims.FirstOrDefault(a => a.Type == ClaimTypes.NameIdentifier || a.Type == "role")?.Value;
 
-
             try
             {
+                int totalCount = 0;
                 var empList = _DbContext.empModels.AsQueryable();
                 if (UserRole == "superadmin")
                 {
-                    empList = _DbContext.empModels.AsQueryable();
+                    empList = _DbContext.empModels.AsQueryable().Where(x => x.role == "admin");
+                    totalCount = empList.Count();
                 }
                 else
                 {
-                    empList = _DbContext.empModels.AsQueryable().Where(reff=>reff.RefranceId==model.referenceId);
+                    empList = _DbContext.empModels.AsQueryable().Where(x => x.RefranceId == model.referenceId && (x.role == "operator" || x.role == "moderator"));
+                    totalCount = empList.Count();
                 }
 
                 if (!string.IsNullOrWhiteSpace(model.role))
@@ -522,7 +522,7 @@ namespace SQCScanner.Controllers
                         result = records,
                         state = true,
                         Count = (int)Math.Ceiling((double)empListCount / model.range),
-                      
+                        userCount = totalCount
                     };
                 }
             }
@@ -727,7 +727,6 @@ namespace SQCScanner.Controllers
             }
         }
 
-
         [HttpPost]
         [Route("updateProfiles")]
         public async Task<IActionResult> updateProfiles([FromForm] updateProfile model)
@@ -863,8 +862,5 @@ namespace SQCScanner.Controllers
             public string? pin { get; set; }
             public string? country { get; set; }
         }
-    
-    
-    
     }
 }

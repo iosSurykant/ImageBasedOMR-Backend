@@ -20,12 +20,14 @@ namespace SQCScanner.Controllers
         private readonly MargeGenSerivce _margeGenSerivce;
         private readonly string _connStr;
         private readonly IConfiguration _configration;
+        private readonly IWebHostEnvironment _env;
 
-        public ResultGenration(MargeGenSerivce margeGenSer, IConfiguration configration)
+
+        public ResultGenration(MargeGenSerivce margeGenSer, IConfiguration configration, IWebHostEnvironment env)
         {
             _margeGenSerivce = margeGenSer;
             _connStr = configration.GetConnectionString("dbc");
-
+            _env = env;
         }
 
         [HttpPost("MargeCSV")]
@@ -40,244 +42,7 @@ namespace SQCScanner.Controllers
         }
 
 
-        //[HttpPost("GenerateResultExcel")]
-        //public async Task<IActionResult> GenerateResultExcel([FromForm] ResultRequest request)
-        //{
-        //    if (request.AnswerKey == null || request.BubbleScan == null)
-        //        return BadRequest("Files missing");
-
-        //    var extraCols = string.IsNullOrEmpty(request.selectedHeaders)
-        //        ? new List<string>()
-        //        : request.selectedHeaders.Split(',').Select(x => x.Trim()).ToList();
-
-        //    var subjectWiseFields = new Dictionary<string, List<string>>();
-
-        //    var questionList = string.IsNullOrEmpty(request.questions)
-        //        ? new List<QuestionRange>()
-        //        : JsonConvert.DeserializeObject<List<QuestionRange>>(request.questions);
-
-        //    if (questionList != null && questionList.Any())
-        //    {
-        //        foreach (var q in questionList)
-        //        {
-        //            int start = int.Parse(q.startQ.Replace("Q", ""));
-        //            int end = int.Parse(q.endQ.Replace("Q", ""));
-
-        //            var list = new List<string>();
-
-        //            for (int i = start; i <= end; i++)
-        //            {
-        //                list.Add("Q" + i);
-        //            }
-
-        //            subjectWiseFields[q.subject] = list;
-        //        }
-        //    }
-
-        //    // 👉 Read AnswerKey (CSV + Excel)
-        //    Dictionary<string, string> answerKey = new Dictionary<string, string>();
-
-        //    if (IsExcel(request.AnswerKey))
-        //    {
-        //        using (var stream = new MemoryStream())
-        //        {
-        //            await request.AnswerKey.CopyToAsync(stream);
-        //            using (var wb = new XLWorkbook(stream))
-        //            {
-        //                var ws = wb.Worksheet(1);
-        //                var header = ws.Row(1);
-        //                var values = ws.Row(2);
-
-        //                for (int i = 1; i <= header.CellCount(); i++)
-        //                {
-        //                    string key = header.Cell(i).GetString().Trim();
-        //                    answerKey[key] = values.Cell(i).GetString();
-        //                }
-        //            }
-        //        }
-        //    }
-        //    else
-        //    {
-        //        var csvData = ReadCSV(request.AnswerKey);
-        //        if (csvData.Any())
-        //            answerKey = csvData.First();
-        //    }
-
-        //    // 👉 Read BubbleScan (CSV + Excel)
-        //    List<Dictionary<string, string>> rowsData;
-
-        //    if (IsExcel(request.BubbleScan))
-        //    {
-        //        rowsData = new List<Dictionary<string, string>>();
-
-        //        using (var stream = new MemoryStream())
-        //        {
-        //            await request.BubbleScan.CopyToAsync(stream);
-        //            using (var wb = new XLWorkbook(stream))
-        //            {
-        //                var ws = wb.Worksheet(1);
-        //                var headers = ws.Row(1).Cells().Select(x => x.GetString().Trim()).ToList();
-
-        //                foreach (var row in ws.RowsUsed().Skip(1))
-        //                {
-        //                    var dict = new Dictionary<string, string>();
-
-        //                    for (int i = 0; i < headers.Count; i++)
-        //                    {
-        //                        dict[headers[i]] = row.Cell(i + 1).GetString();
-        //                    }
-
-        //                    rowsData.Add(dict);
-        //                }
-        //            }
-        //        }
-        //    }
-        //    else
-        //    {
-        //        rowsData = ReadCSV(request.BubbleScan);
-        //    }
-
-        //    var resultData = new List<Dictionary<string, object>>();
-
-        //    foreach (var row in rowsData)
-        //    {
-        //        var obj = new Dictionary<string, object>();
-
-        //        if (!row.ContainsKey(request.selectedKey))
-        //            continue;
-
-        //        string rollValue = row[request.selectedKey];
-        //        obj[request.selectedKey] = rollValue;
-
-        //        // 👉 Extra Columns
-        //        foreach (var ex in extraCols)
-        //        {
-        //            obj[ex] = row.ContainsKey(ex) ? row[ex] : "";
-        //        }
-
-        //        int totalCorrect = 0;
-        //        int totalWrong = 0;
-        //        double totalMarks = 0;
-
-        //        foreach (var subject in subjectWiseFields)
-        //        {
-        //            int correct = 0;
-        //            int wrong = 0;
-        //            double marks = 0;
-
-        //            foreach (var field in subject.Value)
-        //            {
-        //                string studentAns = row.ContainsKey(field) ? row[field] : "";
-
-        //                if (answerKey.ContainsKey(field))
-        //                {
-        //                    if (answerKey[field] == studentAns)
-        //                    {
-        //                        correct++;
-        //                        marks += request.positive;
-        //                    }
-        //                    else if (!string.IsNullOrEmpty(studentAns))
-        //                    {
-        //                        wrong++;
-        //                        marks -= request.negative;
-        //                    }
-        //                }
-        //            }
-
-        //            obj[$"{subject.Key}_Correct"] = correct;
-        //            obj[$"{subject.Key}_Wrong"] = wrong;
-        //            obj[$"{subject.Key}_Marks"] = marks;
-
-        //            totalCorrect += correct;
-        //            totalWrong += wrong;
-        //            totalMarks += marks;
-        //        }
-
-        //        obj["TotalCorrect"] = totalCorrect;
-        //        obj["TotalWrong"] = totalWrong;
-        //        obj["TotalMarks"] = totalMarks;
-
-        //        double percent = 0;
-
-        //        if (request.percentage)
-        //        {
-        //            int totalQ = subjectWiseFields.Sum(x => x.Value.Count);
-        //            percent = totalQ > 0 ? (double)totalCorrect / totalQ * 100 : 0;
-        //            obj["Percentage"] = percent;
-        //        }
-
-        //        if (request.grade)
-        //        {
-        //            string gradeVal = percent >= 90 ? "A+" :
-        //                              percent >= 75 ? "A" :
-        //                              percent >= 60 ? "B" :
-        //                              percent >= 40 ? "C" : "F";
-
-        //            obj["Grade"] = gradeVal;
-        //        }
-
-        //        resultData.Add(obj);
-        //    }
-
-        //    // 👉 Generate CSV Output
-        //    var sb = new StringBuilder();
-
-        //    if (resultData.Any())
-        //    {
-        //        var headers = resultData.First().Keys.ToList();
-        //        sb.AppendLine(string.Join(",", headers));
-
-        //        foreach (var item in resultData)
-        //        {
-        //            var row = headers.Select(h => Escape(item.ContainsKey(h) ? item[h]?.ToString() : ""));
-        //            sb.AppendLine(string.Join(",", row));
-        //        }
-        //    }
-
-        //    var csvBytes = Encoding.UTF8.GetBytes(sb.ToString());
-
-        //    return File(csvBytes, "text/csv", "Result.csv");
-        //}
-
-        //private List<Dictionary<string, string>> ReadCSV(IFormFile file)
-        //{
-        //    var data = new List<Dictionary<string, string>>();
-
-        //    using (var reader = new StreamReader(file.OpenReadStream()))
-        //    {
-        //        var headerLine = reader.ReadLine();
-        //        var headers = headerLine.Split(',');
-
-        //        while (!reader.EndOfStream)
-        //        {
-        //            var line = reader.ReadLine();
-        //            var values = line.Split(',');
-
-        //            var dict = new Dictionary<string, string>();
-
-        //            for (int i = 0; i < headers.Length; i++)
-        //            {
-        //                dict[headers[i].Trim()] = i < values.Length ? values[i].Trim() : "";
-        //            }
-
-        //            data.Add(dict);
-        //        }
-        //    }
-
-        //    return data;
-        //}
-
-        //private bool IsExcel(IFormFile file)
-        //{
-        //    return Path.GetExtension(file.FileName).ToLower() == ".xlsx";
-        //}
-
-        //private string Escape(string s)
-        //{
-        //    if (string.IsNullOrEmpty(s)) return "";
-        //    return $"\"{s.Replace("\"", "\"\"")}\"";
-        //}
-
+        
 
         [HttpPost("GenerateResultExcel2")]
         public async Task<IActionResult> GenerateResultExcel([FromForm] ResultRequest request)
@@ -439,7 +204,6 @@ namespace SQCScanner.Controllers
 
             // 👉 Generate CSV Output
             var sb = new StringBuilder();
-
             if (resultData.Any())
             {
                 var headers = resultData.First().Keys.ToList();
@@ -451,8 +215,63 @@ namespace SQCScanner.Controllers
                     sb.AppendLine(string.Join(",", row));
                 }
             }
-            var csvBytes = Encoding.UTF8.GetBytes(sb.ToString());
-            return File(csvBytes, "text/csv", "Result.csv");
+            //var csvBytes = Encoding.UTF8.GetBytes(sb.ToString());
+            //return File(csvBytes, "text/csv", $"{request.BubbleTableName}_Result.csv");
+
+            // UTF-8 BOM ke saath (Excel me Hindi/special characters sahi dikhenge)
+            byte[] csvBytes = Encoding.UTF8.GetPreamble()
+                .Concat(Encoding.UTF8.GetBytes(sb.ToString()))
+                .ToArray();
+
+            // File name: {BubbleTableName}_Result.csv (sirf invalid chars hataye)
+            var invalid = Path.GetInvalidFileNameChars();
+            string safeTable = string.Concat(request.BubbleTableName.Select(c => invalid.Contains(c) ? '_' : c));
+            string fileName = $"{safeTable}_Result.csv";
+
+            // wwwroot/Results me save
+            string webRoot = _env.WebRootPath ?? Path.Combine(Directory.GetCurrentDirectory(), "wwwroot");
+            string folder = Path.Combine(webRoot, "Results");
+            Directory.CreateDirectory(folder);
+
+            string fullPath = Path.Combine(folder, fileName);
+            await System.IO.File.WriteAllBytesAsync(fullPath, csvBytes);   // same naam ho to overwrite ho jayegi
+
+            string fileUrl = $"{Request.Scheme}://{Request.Host}/Results/{Uri.EscapeDataString(fileName)}";
+
+            // Pagination values (safe limits)
+            int page = 1;
+            int pageSize = 500;
+
+            int totalRecords = resultData.Count;
+            int totalPages = (int)Math.Ceiling(totalRecords / (double)pageSize);
+
+            var pagedData = resultData
+                .Skip((page - 1) * pageSize)
+                .Take(pageSize)
+                .ToList();
+
+            return Ok(new ResultFileResponse
+            {
+                state = true,
+                url = fileUrl,                
+                Data = pagedData,              
+                page = page,
+                pageSize = pageSize,
+                totalRecords = totalRecords,
+                totalPages = totalPages
+            });
+        }
+       
+        public class ResultFileResponse
+        {
+            public bool state { get; set; }
+            public string url { get; set; }
+            public List<Dictionary<string, object>> Data { get; set; }
+            public int page { get; set; }
+            public int pageSize { get; set; }
+            public int totalRecords { get; set; }
+            public int totalPages { get; set; }
+            public string message { get; set; }
         }
 
         // ✅ DB Table Reader

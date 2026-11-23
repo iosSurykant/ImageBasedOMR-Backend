@@ -8,6 +8,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Internal;
 using Microsoft.IdentityModel.Tokens;
 using Serilog.Parsing;
+using SharpCompress.Compressors.ZStandard.Unsafe;
 using SQCScanner.Modal.DataFinalaization;
 using SQCScanner.Services;
 using Syncfusion.EJ2.Linq;
@@ -36,10 +37,12 @@ namespace SQCScanner.Controllers
         }
 
 
+        
         [HttpGet("DataFinalGetList")]
-        public async Task<IActionResult> DataFinalGetList(int? Sr)
+        public async Task<IActionResult> DataFinalGetList2(int? Sr, [FromQuery] int page = 1, [FromQuery] int range = 10)
         {
-            try {
+            try
+            {
                 var gettoken = Request.Headers["authorization"].FirstOrDefault()?.Replace("Bearer ", "").Trim();
                 if (string.IsNullOrEmpty(gettoken))
                 {
@@ -48,84 +51,99 @@ namespace SQCScanner.Controllers
                 }
                 var handler = new JwtSecurityTokenHandler();
                 var tokendecription = handler.ReadJwtToken(gettoken);
-                var empid = tokendecription.Claims.FirstOrDefault(c => c.Type == "nameid")?.Value;
-                string empRole = tokendecription.Claims.FirstOrDefault(c => c.Type == "role")?.Value;
+                int empid = int.Parse(tokendecription.Claims.FirstOrDefault(c => c.Type == "nameid")?.Value);
 
+                string empRole = tokendecription.Claims.FirstOrDefault(c => c.Type == "role")?.Value;
+                string refranceId = tokendecription.Claims.FirstOrDefault(c => c.Type == "refranceId")?.Value;
 
                 logger.LogInformation("Get Data Finalzation Start", Sr);
                 List<DataFinalizedClass> dataRec = new List<DataFinalizedClass>();
-                if(empRole == "admin")
-                {
-                    if (Sr==0)
-                    {
-                        dataRec = await context.DataFinalized.ToListAsync();
-                        if (dataRec.Count == 0)
-                        {
-                            return NotFound("Data not found");
-                        }
+                List<DataFinalizedNew> dataRec2 = new List<DataFinalizedNew>();
 
-                    }    // Where(x => x.EmpId == int.Parse(empid))
-                    else
+                if (empRole == "superadmin")
+                {
+                    dataRec = await context.DataFinalized.OrderByDescending(a => a.Sr).Skip((page - 1) * range).Take(range).ToListAsync();
+                    if (dataRec.Count == 0)
+                        return NotFound("Data not found");
+
+                }
+                else if (empRole == "admin" || empRole == "moderator")
+                {
+                    var empList = await context.empModels.Where(x => x.RefranceId == refranceId).ToListAsync();
+
+                    foreach (var data in empList)
                     {
-                        dataRec = await context.DataFinalized.Where(x => x.Sr == Sr).ToListAsync();
-                        if (dataRec.Count == 0)
-                        {
-                            return NotFound("Data not found");
-                        }
-                        string[] dataResult = dataRec.FirstOrDefault()?.Remark.Split(',').Select(x => x.Trim()).ToArray();
-                        string tableName = dataResult[^1];
-                        tableName = tableName.Substring("TableName-".Length);
-                        using (var conna = new SqlConnection(conn.GetConnectionString("dbc")))
-                        {
-                            conna.Open();
-                            var result = await conna.QueryAsync($"select * from [{tableName}]");
-                            return Ok(new { records = result, TableName= tableName});
-                        }
+                        int empId = int.Parse(data.EmpId);
+                        var dataRec1 = await context.DataFinalized.Where(a=>a.EmpId== empId).ToListAsync();
+                        dataRec.AddRange(dataRec1);
                     }
-                    // Extract Teble n Target 
-                    logger.LogInformation("Got Data Finalzation list and filter as per Id based.");
+                    dataRec = dataRec.OrderByDescending(a => a.Sr).Skip((page - 1) * range).Take(range).ToList();
+                    if (dataRec.Count == 0)
+                        return NotFound("Data not found");
+
                 }
                 else
                 {
-                    if (Sr == 0)
-                    {
-                        dataRec = await context.DataFinalized.Where(x => x.EmpId == int.Parse(empid)).ToListAsync();    // Where(x => x.EmpId == int.Parse(empid))
-                        if (dataRec.Count == 0)
-                        {
-                            return NotFound("Data not found");
-                        }
-                    }
-                    else
-                    {
-                        dataRec = await context.DataFinalized.Where(x => x.Sr == Sr && x.EmpId == int.Parse(empid)).ToListAsync();
-                        if (dataRec.Count == 0)
-                        {
-                            return NotFound("Data not found");
-                        }
-                        string[] dataList = dataRec.FirstOrDefault()?.Remark.Split(",").Select(x => x.Trim()).ToArray();
-                        string tableName = dataList[^1].Substring("TableName-".Length);
-                        using (var conna = new SqlConnection(conn.GetConnectionString("dbc")))
-                        {
-                            var result = conna.QueryAsync($"select * from [{tableName}]") ;
-                            var res = new { records = result, TableName = tableName };
-                            Console.WriteLine(res);
-                            return Ok(res);
-                        }
-                    }
-                    // Extract Teble n Target 
-                    logger.LogInformation("Got Data Finalzation list and filter as per Id based.");
+                    dataRec = await context.DataFinalized.OrderByDescending(a => a.Sr).Where(a=> a.EmpId==empid).Skip((page - 1) * range).Take(range).ToListAsync();
+                    if (dataRec.Count == 0)
+                        return NotFound("Data not found");
+
                 }
-                if (dataRec.Count == 0)
+
+                if (Sr == 0)
                 {
-                    logger.LogWarning("Data Finalzation list is Empty");
-                    return NoContent();
+                    string path = "";
+                    foreach (var data in dataRec)
+                    {
+                        DataFinalizedNew newItem = new DataFinalizedNew();
+                        newItem.Sr = data.Sr;
+                        newItem.Time = data.Time;
+                        newItem.EmpId = data.EmpId;
+                        newItem.TestId = data.TestId;
+                        newItem.Remark = data.Remark;
+                        newItem.state = data.state;
+                        string? Template = data.Remark.Split(",").FirstOrDefault(a => a.StartsWith("TemplateId-"))?.Split("-")[1];
+                        var template = await context.ImgTemplate.FirstOrDefaultAsync(a => a.Id == int.Parse(Template));
+                        path = template != null ? template.JsonPath : "JSON Not Found";
+                        newItem.templateJSON = path;
+                        dataRec2.Add(newItem);
+                    }
+                    return Ok(dataRec2);
                 }
-                return Ok(dataRec);
+                else
+                {
+                    dataRec = await context.DataFinalized.Where(x => x.Sr == Sr).Skip((page - 1) * range).Take(range).ToListAsync();
+                    if (dataRec.Count == 0)
+                        return NotFound("Data not found");
+
+                    string[] dataResult = dataRec.FirstOrDefault()?.Remark.Split(',').Select(x => x.Trim()).ToArray();
+                    string tableName = dataResult[^1];
+                    tableName = tableName.Substring("TableName-".Length);
+                    using (var conna = new SqlConnection(conn.GetConnectionString("dbc")))
+                    {
+                        conna.Open();
+                        var result = await conna.QueryAsync($"select * from [{tableName}]");
+                        return Ok(new { records = result, TableName = tableName });
+                    }
+                }
             }
-            catch (Exception ex) {
+            catch (Exception ex)
+            {
                 logger.LogError("Facing Exception error", ex.Message);
                 return StatusCode(500, ex.Message);
             }
+        }
+
+
+        public class DataFinalizedNew
+        {
+            public int Sr { get; set; }
+            public DateTime Time { get; set; }
+            public int EmpId { get; set; } = 0;
+            public int TestId { get; set; } = 0;
+            public string Remark { get; set; } = "";
+            public string state { get; set; } = "";
+            public string templateJSON { get; set; } = "";
         }
 
         [HttpPut("DataFinalRecUpdate")]
@@ -138,7 +156,7 @@ namespace SQCScanner.Controllers
                     conna.Open();
 
                     string where = model.data["Sr"];
-                    string query = $"update [{model.tableName}] SET {string.Join(",",model.data.Where(a=>a.Key!="Sr").Select(a => $" [{a.Key}] = '{a.Value}'"))} , QC = 1 where Sr = '{where}'";  //  QC='C'
+                    string query = $"update [{model.tableName}] SET {string.Join(",", model.data.Where(a => a.Key != "Sr").Select(a => $" [{a.Key}] = '{a.Value}'"))} , QC = 1 where Sr = '{where}'";  //  QC='C'
                     var result = await conna.ExecuteAsync(query);
                     var checkStatus = await conna.QueryAsync($"Select * from [{model.tableName}]");
                     //1. bool isDone = checkStatus.Any(a => Convert.ToInt32(a.QC) == 0);
@@ -158,11 +176,14 @@ namespace SQCScanner.Controllers
 
                     return Ok(new { message = $"Record No. {where} has been updated successfully" });
                 }
-            }catch(Exception ex)
+            }
+            catch (Exception ex)
             {
                 return StatusCode(500, ex.Message);
             }
         }
+
+
         public class udpateData
         {
             public int Sr { get; set; }

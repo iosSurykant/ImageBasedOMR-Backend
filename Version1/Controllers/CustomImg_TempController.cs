@@ -19,8 +19,10 @@ using Version1.Data;
 using static System.Runtime.InteropServices.JavaScript.JSType;
 using static SQCScanner.Modal.CustomTemplate.TempDesignClass;
 using DocumentFormat.OpenXml;
-using Microsoft.OpenApi.Expressions;
 using File = System.IO.File;
+using System.Security.Claims;
+using System.Linq;
+using Syncfusion.EJ2.Linq;
 
 
 
@@ -81,7 +83,7 @@ namespace SQCScanner.Controllers
 
                     var templateEntity = new StaticImgClass
                     {
-                        TemplateId = $"OMR - {model.TemplateId}",
+                        TemplateId = $"{model.TemplateId}",
                         TemplateName = model.TemplateName,
                         TemplateImgBase64 = base64String,
                         discription = model.discription,
@@ -134,7 +136,7 @@ namespace SQCScanner.Controllers
                 // 2. TemplateId change
                 if (!string.IsNullOrWhiteSpace(model.TemplateId))
                 {
-                    templateEntity.TemplateId = $"OMR - {model.TemplateId}";
+                    templateEntity.TemplateId = $"{model.TemplateId}";
                 }
                 // 3. Discription chamge
                 if (!string.IsNullOrWhiteSpace(model.discription))
@@ -178,14 +180,14 @@ namespace SQCScanner.Controllers
         }
 
         [HttpGet("ViewImgTempale")]
-        public IActionResult GetAllTemplates(int? tempId)
+        public IActionResult GetAllTemplates([FromQuery] int? tempId, [FromQuery] int pageNo = 0, [FromQuery] int record = 0)
         {
             try
             {
                 object templates;
                 if (tempId == null)
                 {
-                    templates = _dbContext.StaticImgClass.ToList();
+                    templates = _dbContext.StaticImgClass.OrderByDescending(a=>a.Id).Skip((pageNo - 1) * record).Take(record).ToList();
                 }
                 else
                 {
@@ -204,20 +206,21 @@ namespace SQCScanner.Controllers
         [HttpDelete("DeleteImgTempale")]
         public async Task<IActionResult> DeleteImageTemplate([FromQuery] string templateIdVal)
         {
+            int templateId = int.Parse(templateIdVal);
             try
             {
-                if (string.IsNullOrWhiteSpace(templateIdVal))
+                if (templateId == null || templateId == 0)
                 {
-                    return BadRequest("Template ID is required.");
+                   return BadRequest("TemplateId is required and must be a valid integer.");
                 }
 
-                var template = await _dbContext.StaticImgClass.FirstOrDefaultAsync(t => t.Id == int.Parse(templateIdVal));
+                var template = await _dbContext.StaticImgClass.FirstOrDefaultAsync(t => t.Id == templateId);
 
                 if (template == null)
                 {
                     _logger.LogWarning(
                         "DeleteImageTemplate failed. TemplateId: {TemplateId} not found.",
-                        templateIdVal);
+                        templateId);
 
                     return NotFound("Template not found.");
                 }
@@ -226,9 +229,7 @@ namespace SQCScanner.Controllers
 
                 await _dbContext.SaveChangesAsync();
 
-                _logger.LogInformation(
-                    "Template deleted successfully. TemplateId: {TemplateId}",
-                    templateIdVal);
+                _logger.LogInformation("Template deleted successfully. TemplateId: {TemplateId}", templateId);
 
                 return Ok(new
                 {
@@ -240,7 +241,7 @@ namespace SQCScanner.Controllers
             {
                 _logger.LogWarning(
                     "DeleteImageTemplate request was cancelled. TemplateId: {TemplateId}",
-                    templateIdVal);
+                    templateId);
 
                 return StatusCode(499, "Request cancelled.");
             }
@@ -249,7 +250,7 @@ namespace SQCScanner.Controllers
                 _logger.LogError(
                     ex,
                     "Error occurred while deleting template. TemplateId: {TemplateId}",
-                    templateIdVal);
+                    templateId);
 
                 return StatusCode(
                     StatusCodes.Status500InternalServerError,
@@ -335,7 +336,8 @@ namespace SQCScanner.Controllers
                     imgPath = Path.Combine("ImageManager", model.TemplateImgFile?.FileName),
                     JsonPath = Path.Combine("TempManager", model.TemplateJsonFile?.FileName),
                     CreateAt = date.ToString(),
-                    discription = model.Discription
+                    discription = model.Discription,
+                    EmpiId = empid
                 });
                 await _dbContext.SaveChangesAsync();
                 int getLastInsert = imgTemp.Entity.Id;
@@ -344,7 +346,8 @@ namespace SQCScanner.Controllers
                 {
                     TemplateLogo = model.TemplateLogoFile != null ? Path.Combine("wFileManager", empid, "TempalteDesign", model.TemplateLogoFile.FileName) : "",
                     TemplateBarcode = model.TemplateBarcodeFile != null ? Path.Combine("wFileManager", empid, "TempalteDesign", model.TemplateBarcodeFile.FileName): "",
-                    TemplateId = getLastInsert
+                    TemplateId = getLastInsert,
+                    EmpId = empid
                 };
                 _dbContext.Add(templateena);
                 await _dbContext.SaveChangesAsync();
@@ -365,25 +368,102 @@ namespace SQCScanner.Controllers
         }
 
         [HttpGet]
-        [Route("getimgtempDes")]
-        public async Task<IActionResult> createimgtempDes(int? TempId = 0)
+        [Route("getimgtempDes")] 
+        public async Task<IActionResult> createimgtempDes(int? FindTempId = 0, [FromQuery] int pageNo = 0, [FromQuery] int record = 0)
         {
             try
             {
-                _logger.LogInformation("StartGet design list records");
-                var result = await _dbContext.ImgTemplate.Join(_dbContext.staticImgDesigns, tempId => tempId.Id, TempDesign => TempDesign.TemplateId, (tempId, TempDesign) => new { TemplateId = tempId.Id, TemplateName = tempId.FileName, ImgPath = tempId.imgPath, jsonPath = tempId.JsonPath, Create = tempId.CreateAt, discriotion = tempId.discription, TemplateDesignBar = TempDesign.TemplateLogo, TemplateDesignImg = TempDesign.TemplateBarcode }).ToListAsync();
-                dynamic dataRec;
-                if (TempId == 0)
+                var getToken = Request.Headers["Authorization"].FirstOrDefault()?.Replace("Bearer ", "").Trim();
+                var tokenHandler = new JwtSecurityTokenHandler();
+                var jwtToken = tokenHandler.ReadJwtToken(getToken);
+                var userId = jwtToken.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier || c.Type == "nameid")?.Value;
+                var userName = jwtToken.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier || c.Type == "unique_name")?.Value;
+                string UserEmail = jwtToken.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier || c.Type == "email")?.Value;
+                string UserRole = jwtToken.Claims.FirstOrDefault(a => a.Type == ClaimTypes.NameIdentifier || a.Type == "role")?.Value;
+                string refranceId = jwtToken.Claims.FirstOrDefault(a => a.Type == ClaimTypes.NameIdentifier || a.Type == "refranceId")?.Value;
+                List<CustomImage> result;
+                List<CustomImage> result2;
+
+                if (UserRole == "superadmin")
                 {
-                    dataRec = result;
+                    _logger.LogInformation("StartGet design list records, SuperAdmin");
+                    result = await _dbContext.ImgTemplate.Join(
+                    _dbContext.staticImgDesigns, 
+                    tempId => tempId.Id, 
+                    TempDesign => TempDesign.TemplateId, 
+                    (tempId, TempDesign) => 
+                    new CustomImage { 
+                        TemplateId = tempId.Id, 
+                        TemplateName = tempId.FileName, 
+                        ImgPath = tempId.imgPath, 
+                        jsonPath = tempId.JsonPath, 
+                        Create = tempId.CreateAt, 
+                        discriotion = tempId.discription,
+                        EmpId = tempId.EmpiId,
+                        TemplateDesignBar = TempDesign.TemplateLogo, 
+                        TemplateDesignImg = TempDesign.TemplateBarcode,
+                    }).ToListAsync();
+                    result2 = result.Join(_dbContext.empModels, a => a.EmpId, b => b.EmpId, (a, b) => new CustomImage
+                    {
+                        TemplateId = a.TemplateId,
+                        TemplateName = a.TemplateName,
+                        ImgPath = a.ImgPath,
+                        jsonPath = a.jsonPath,
+                        Create = a.Create,
+                        discriotion = a.discriotion,
+                        TemplateDesignBar = a.TemplateDesignBar,
+                        TemplateDesignImg = a.TemplateDesignImg,
+                        EmpId = a.EmpId,
+                        empEmail = b.EmpEmail,
+                        empRole = b.role
+                    }).OrderByDescending(a=>a.Create).Skip((pageNo-1)*1).Take(record).ToList();
                 }
                 else
                 {
+                    _logger.LogInformation("StartGet design list records, Operator, Modrator");
+                    var empIds = await _dbContext.empModels.Where(e => e.RefranceId == refranceId).Select(e => e.EmpId).ToListAsync();
 
-                    dataRec = result.Where(id => id.TemplateId == TempId);
+                    result = await _dbContext.ImgTemplate.Join(
+                    _dbContext.staticImgDesigns,
+                    tempId => tempId.Id,
+                    TempDesign => TempDesign.TemplateId,
+                    (tempId, TempDesign) =>
+                    new CustomImage {
+                        TemplateId = tempId.Id,
+                        TemplateName = tempId.FileName,
+                        ImgPath = tempId.imgPath,
+                        jsonPath = tempId.JsonPath,
+                        Create = tempId.CreateAt,
+                        discriotion = tempId.discription,
+                        EmpId = tempId.EmpiId,
+                        TemplateDesignBar = TempDesign.TemplateLogo,
+                        TemplateDesignImg = TempDesign.TemplateBarcode,
+                    }).Where(aa=>empIds.Contains(aa.EmpId)).ToListAsync();
+
+                    result2 = result.Join(_dbContext.empModels, a => a.EmpId, b => b.EmpId, (a, b) => new CustomImage {
+                        TemplateId = a.TemplateId,
+                        TemplateName = a.TemplateName,
+                        ImgPath = a.ImgPath,
+                        jsonPath = a.jsonPath,
+                        Create = a.Create,
+                        discriotion = a.discriotion,
+                        TemplateDesignBar = a.TemplateDesignBar,
+                        TemplateDesignImg = a.TemplateDesignImg,
+                        EmpId = a.EmpId,
+                        empEmail = b.EmpEmail,
+                        empRole = b.role
+                    }).OrderByDescending(a=>a.Create).Skip((pageNo - 1) * 1).Take(record).ToList();
+
                 }
-                Console.WriteLine(dataRec);
-
+                dynamic dataRec;
+                if (FindTempId == 0)
+                {
+                    dataRec = result2;
+                }
+                else
+                {
+                    dataRec = result.Where(id => id.TemplateId == FindTempId);
+                }
                 return Ok(dataRec);
             }
             catch (Exception ex)
@@ -391,6 +471,20 @@ namespace SQCScanner.Controllers
                 _logger.LogError(ex, "");
                 return StatusCode(StatusCodes.Status500InternalServerError, "");
             }
+        }
+        public class CustomImage
+        {
+            public int TemplateId { get; set; } = 0;
+            public string? TemplateName { get; set; } = "";
+            public string? ImgPath { get; set; } = "";
+            public string? jsonPath { get; set; } = "";
+            public string? Create { get; set; } = "";
+            public string? discriotion { get; set; } = "";
+            public string? TemplateDesignBar { get; set; } = "";
+            public string? TemplateDesignImg { get; set; } = "";
+            public string? EmpId { get; set; } = "";
+            public string? empEmail { get; set; } = "";
+            public string? empRole { get; set; } = "";
         }
 
         [HttpDelete]
@@ -509,13 +603,11 @@ namespace SQCScanner.Controllers
                         await model.TemplateBarcodeFile.CopyToAsync(tempImg);
                     }
                 }
-                
-                
-                
-                
-                
-                
-                return Ok();
+
+                // 
+
+
+                return Ok("abhi n hogi isme work karna hai");
             }
             catch (Exception ex)
             {

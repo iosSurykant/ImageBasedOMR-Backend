@@ -15,13 +15,21 @@ using SixLabors.ImageSharp;
 using SQCScanner.Modal;
 using Serilog;
 using Microsoft.AspNetCore.Http.Features;
-using Microsoft.OpenApi.Models;
+using Org.BouncyCastle.Ocsp;
+using ZXing.Aztec.Internal;
+using Microsoft.AspNetCore.Mvc;
+using static SQCScanner.Controllers.userAuth;
+using SQCScanner.minimal_api;
+
+using System.Data;
+using Microsoft.Data.SqlClient;
 
 
 var builder = WebApplication.CreateBuilder(args);
 Log.Logger = new LoggerConfiguration().ReadFrom.Configuration(builder.Configuration).CreateLogger();
 builder.Host.UseSerilog();  
 builder.Services.AddDbContext<ApplicationDbContext>(options => options.UseSqlServer(builder.Configuration.GetConnectionString("dbc")));
+builder.Services.AddScoped<IDbConnection>(options => new SqlConnection(builder.Configuration.GetConnectionString("dbc")));
 builder.WebHost.ConfigureKestrel(options =>
 {
     options.ListenAnyIP(9900);
@@ -53,7 +61,6 @@ builder.Services.AddHttpContextAccessor();
 
 builder.Services.AddEndpointsApiExplorer();   // Make meta data for get/post for swagger
 builder.Services.AddSwaggerGen();             // Gen UI Swagger
-builder.Services.AddHttpClient();
 
 builder.Services.Configure<FormOptions>(options =>
 {
@@ -159,7 +166,7 @@ app.Use(async (context, next) =>
             await context.Response.WriteAsync("Token missing");
             return;
         }
-
+        
         // 3. Parse JWT token to get userId   
         string userId = null;
         try
@@ -186,7 +193,6 @@ app.Use(async (context, next) =>
         var connectionManager = context.RequestServices.GetRequiredService<WebSocketConnectionManager>();
         var handlerService = context.RequestServices.GetRequiredService<WebSoketHandler>();
         var controlService = context.RequestServices.GetRequiredService<OmrProcessingControlService>();
-
         connectionManager.RemoveSocket(userId);  // Remove socket before adding new using UserId (f5, newTab etc)
 
         // 5. Add socket with userId
@@ -273,7 +279,49 @@ app.Use(async (context, next) =>
     }
 });
 
-app.MapControllers();
+
+// Minimal API -- Open
+// Light waight api, becasuse we can create into program.cs file without wo at controller using routing. and with short n fast code.
+
+//List<LoginTemp> loginData = new List<LoginTemp>
+//{
+//    new LoginTemp {EmpId = 71, Token = "token1", Expiry = DateTime.Now.AddHours(2), Role = "admin1"},
+//    new LoginTemp {EmpId = 72, Token = "token2", Expiry = DateTime.Now.AddHours(2.1), Role = "admin2"}
+//};
+
+
+//// GET API 1 << Basically calling
+//app.MapGet("/hello", () =>
+//{
+//    return Results.Ok($"Hello MinialApi");
+//});
+
+//// GET API via Id << basically calling with id
+//app.MapGet("/Student/Get/{id}", (int id)=> {
+//    return Results.Ok($"Hello MinialApi={id}");
+//});
+
+//// GET Record from list.  << basically calling with id and fiter using linq.
+//app.MapGet("/Student/EmpId/{Empid}", (int Empid) => {
+//    var student = loginData.FirstOrDefault(a => a.EmpId == Empid);
+//    if (student == null)
+//        return Results.BadRequest("Data not found");
+//    return Results.Ok(student);
+//});
+
+// Get EmpRec << use service class directory for ApplicationDbContect, Service class etc, agr model call karna ho to direct kar sakte hai. 
+//app.MapGet("/Emp/Records/", async (ApplicationDbContext _context) => {
+//    List<EmpModel> data = await _context.empModels.AsNoTracking().ToListAsync();
+//    return Results.Ok(data);
+//});
+
+
+
+app.MapUserAuth();
+app.MapTemplateMoudle();
+
+// Minimal API -- Close
+
 
 try
 {

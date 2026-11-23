@@ -134,9 +134,7 @@ namespace SQCScanner.websoketManager
 
                             var result = await ProcessOmrApi(model);
                             success = result;
-                            responseMessage = result
-                                ? "OMR API Called Successfully"
-                                : "OMR Processing Failed";
+                            responseMessage = result ? "OMR API Called Successfully": "OMR Processing Failed";
                         }
                         catch (Exception ex)
                         {
@@ -266,7 +264,7 @@ namespace SQCScanner.websoketManager
                 //    new AuthenticationHeaderValue("Bearer", token);
 
                 var response = await _httpClient.PostAsJsonAsync(
-                    "http://192.168.1.26:9900/api/OmrProcessing/process-omr",
+                    "http://localhost:9900/api/OmrProcessing/process-omr",
                     model);
 
                 if (response.IsSuccessStatusCode)

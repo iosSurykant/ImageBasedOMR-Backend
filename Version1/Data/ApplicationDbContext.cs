@@ -29,6 +29,7 @@ namespace Version1.Data
         public DbSet<TempDesignClass> staticImgDesigns { get; set; }
         public DbSet<DataFinalizedClass> DataFinalized { get; set; }
 
+
         // yaha se hum code se master table ko handle kar rahe hai override kr rahe hai, 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {

@@ -199,12 +199,12 @@ namespace SQCScanner.Controllers
                         Currentpackage = result.Find(a => a.PackId == packageId);
                         res.activePackage = new
                         {
-                            pack_no = packageId ?? 0,                               // Current Package ID
-                            recognition_credits = creditLimitss.CreditLimit ?? 0,   // Over all limit ++wallet
-                            CurrentPackage = Currentpackage.PackageName ?? 0,       // Current Package Name
+                            pack_no = packageId ?? 0,                                 // Current Package ID
+                            recognition_credits = creditLimitss.CreditLimit ?? 0,     // Over all limit ++wallet
+                            CurrentPackage = Currentpackage.PackageName ?? 0,         // Current Package Name
                             reneration_results = 5,                                 
-                            recognition_credits_total = 100,               
-                            generation_results_total = 50,                          // Total Successfull OMR Sheet Results 
+                            recognition_credits_total = 100,                
+                            generation_results_total = 50,                            // Total Successfull OMR Sheet Results 
                         };
                     }
                     res.status = true;
@@ -222,8 +222,6 @@ namespace SQCScanner.Controllers
             }
             return Ok(res);
         }
-        
-        
         
         public class PackagesApi 
         {

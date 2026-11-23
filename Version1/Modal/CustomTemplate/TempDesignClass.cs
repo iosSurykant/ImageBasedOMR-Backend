@@ -9,6 +9,7 @@ namespace SQCScanner.Modal.CustomTemplate
         public string? TemplateLogo { get; set; }
         public string? TemplateBarcode { get; set; }
         public int? TemplateId { get; set; }
+        public string? EmpId { get; set; }
 
         [NotMapped]
         public IFormFile? TemplateLogoFile { get; set; }

@@ -1,4 +1,8 @@
 ﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+using System.Diagnostics;
+using System.Runtime;
+using System.Threading;
 using OpenCvSharp;
 using System.Collections.Generic;
 using System.IO;
@@ -44,6 +48,8 @@ namespace Version1.Services
     {
         private readonly ApplicationDbContext _context;
         private readonly ILogger _ILogger;
+        private static int _processedCount;      // GC cleanup counter
+        private const int GcEvery = 50;          // har 50 sheets baad LOH compact + GC
 
         public OmrProcessingService(ApplicationDbContext context, ILogger<OmrProcessingService> iLogger)
         {
@@ -56,261 +62,264 @@ namespace Version1.Services
 
         public async Task<OmrResult> ProcessOmrSheet(string imagePath, string templatePath, string imageUrl, int ser, string userName)
         {
-
-            string debugging = Path.GetFileName(Path.GetDirectoryName(imagePath));
-            string alignedImages = $"wFileManager/ScanResult/TemplateImages/{userName}/{debugging}";
-            Directory.CreateDirectory(alignedImages);
-            var result = new OmrResult                         // Make model get Img name and make Dictionary <key, value>
+            var disposables = new List<IDisposable>();      // native Mat / ImageSharp objects yaha track hote hain
+            var swTotal = Stopwatch.StartNew();
+            try
             {
-                FileName = Path.GetFileName(imagePath),
-                FieldResults = new Dictionary<string, string>()
-            };
+                _ILogger.LogDebug("OMR processing started: {File} (Sr {Sr})", Path.GetFileName(imagePath), ser);
 
-            result.FieldResults["Sr"] = $"{ser}";
-            var templateJson = File.ReadAllText(templatePath);  // Json k har Stringify karta hai.
-            var template = JObject.Parse(templateJson);         // String ko Parse karta object banata hai.
-            using var demoImage = Image.Load<Rgba32>(imageUrl);
-            using var originalImage = Image.Load<Rgba32>(imagePath);
-            // 1. Rotated Detacions -- OPEN
-            var exif = originalImage.Metadata.ExifProfile;
-            if (exif != null)
-            {
-                // Orientation tag nikalne ki koshish
-                var orientation = exif.GetValue(ExifTag.Orientation);
-                if (orientation != null)
-                {
-                    int orientationValue = (int)orientation.Value;
-                    int rotationDegrees = orientationValue switch
-                    {
-                        1 => 0,
-                        3 => 180,
-                        6 => 90,
-                        8 => 270,
-                        _ => 0
-                    };
-                    result.FieldResults["Rotation"] = $"-{rotationDegrees}";
-                }
-                else
-                {
-                    Console.WriteLine("Orientation tag not found in EXIF metadata.");
-                }
-            }
-            else
-            {
-                Console.WriteLine("No EXIF metadata found.");
-            }
-
-            // Demo 
-            using var ms2 = new MemoryStream();                          // RAM ke andar ek virtual file
-            demoImage.SaveAsBmp(ms2);                                       // Convert into Bit Image Sharp and Open Cv k liye 
-            ms2.Seek(0, SeekOrigin.Begin);
-            using var bmp2 = new System.Drawing.Bitmap(ms2);
-            using var demoImg = OpenCvSharp.Extensions.BitmapConverter.ToMat(bmp2);   // convert into matrix
-
-            // Scaning
-            using var ms = new MemoryStream();                              // RAM ke andar ek virtual file
-            originalImage.SaveAsBmp(ms);                                    // Convert into Bit Image Sharp and Open Cv k liye 
-            ms.Seek(0, SeekOrigin.Begin);                       
-            using var bmp = new System.Drawing.Bitmap(ms);  
-            using var matInput = OpenCvSharp.Extensions.BitmapConverter.ToMat(bmp);   // convert into matrix
-            string fileName2 = $"aligned_{Guid.NewGuid()}.png";
-            string outputPath2 = Path.Combine(alignedImages, fileName2);
-            using var mat = Cv2.ImRead(imagePath);                             //  Read with OpenCV
-            //Cv2.ImWrite(outputPath2, mat);                                  //  Save processed image
-            //originalImage.Save(outputPath2);
-
-
-            var template2 = JObject.Parse(templateJson);
-            
-            // Testing Auto Rotate Methord     -- REWORK on Auto Rotation
-            //var FindRotated = await RotateAndCheckMarkers(matInput, template2);
-            Mat RotatedFinal = new Mat();
-            RotatedFinal = matInput;         //-- Jab bhi kabhi hum work karnege wo usko "RotatedFinal"
-
-            // Demo Image cordications
-            var MatImgOut = await AlignWithTemplate(demoImg, template2, "demo");
-
-            // Scanning Image cordications
-            var MatImgOut2 = await AlignWithTemplate(RotatedFinal, template2, "scan");         
-
-            if ((MatImgOut == null && MatImgOut2 == null))
-            {
-                result.Success = false;
-                result.FieldResults["Report"] = "Skew markers are not filled or missing. Cannot proceed with OMR processing.";
-
-                string outputPath6 = Path.Combine($"{alignedImages}/ERROR", result.FileName);
-                Cv2.ImWrite(outputPath6, mat);
-                return result;
-            }
-
-            Point2f[] demoDetaction = MatImgOut
-                .Select(p => new Point2f(p.X, p.Y))
-                .ToArray();
-
-            //Point2f[] scaningDetaction = MatImgOut2.Select(p => new Point2f(p.X, p.Y)).ToArray();
-
-
-            Point2f[] scaningDetaction = null;
-
-            if (MatImgOut2 != null)
-            {
-                scaningDetaction = MatImgOut2
-                    .Select(p => new Point2f(p.X, p.Y))
-                    .ToArray();
-            }
-
-            // Detected corners mark (Green) and SAVE
-            foreach (var pt in demoDetaction)
-            {
-                Cv2.Circle(demoImg, (int)pt.X, (int)pt.Y, 1, new Scalar(0, 255, 0), -1);
-            }
-            string markedPath = Path.Combine(alignedImages, $"marked_{Guid.NewGuid()}.png");
-            //demoImg.SaveImage(markedPath);
-
-            // Detact corners mark scaning and SAVE
-            foreach (var pt in scaningDetaction)
-            { 
-                Cv2.Circle(RotatedFinal, (int)pt.X, (int)pt.Y, 1, new Scalar(0, 0, 255), -1);
-            }
-            string markedPath2 = Path.Combine(alignedImages, $"marked_{Guid.NewGuid()}.png");
-            //matInput.SaveImage(markedPath2);
-
-            // Convert into Wrap image <old image cordination > New Image Cordination) and SAVE
-            Mat aligned = new Mat();
-            if(demoDetaction.Length == 4 || scaningDetaction.Length == 4)
-            {
-                Mat homography = Cv2.GetPerspectiveTransform(scaningDetaction, demoDetaction);
-                Cv2.WarpPerspective(RotatedFinal, aligned, homography, demoImg.Size());
-            }
-            else if (demoDetaction.Length == 3 && scaningDetaction.Length == 3)
-            {
-                Mat H = Cv2.GetAffineTransform(scaningDetaction, demoDetaction);
-                Cv2.WarpAffine(RotatedFinal, aligned, H, demoImg.Size());
-                markedPath2 = Path.Combine(alignedImages, $"wraped_{Guid.NewGuid()}.png");
-                //aligned.SaveImage(markedPath2);
-            }
-            else if (demoDetaction.Length == 2 && scaningDetaction.Length == 2)
-            {
-                //aligned = FixWithTwoPoints(RotatedFinal, scaningDetaction, demoDetaction);
-                aligned = FixWithTwoPointsAdvanced(
-                       RotatedFinal,
-                       scaningDetaction,
-                       demoDetaction,
-                       new CvSize(demoImg.Width, demoImg.Height)
-                );
-                markedPath2 = Path.Combine(alignedImages, $"marked_{Guid.NewGuid()}.png");
-            }
-            else
-            {
-                throw new Exception("Not enough alignment points for warp.");
-            }
-
-            string debugPath = Path.Combine(alignedImages, $"wrapPrespativ_{Guid.NewGuid()}.png");
-            //aligned.SaveImage(debugPath);
-
-            // Convert Mat to byte[] (e.g., PNG in memory)
-            byte[] imageBytes = aligned.ToBytes(".png");
-            Image<Rgba32> scanningImage = Image.Load<Rgba32>(imageBytes);
-            // Bitmap bitmap = BitmapConverter.ToBitmap(aligned);
-
-            // Continue All Process and SAVE (before bubble Scanning)
-            var image = scanningImage.Clone();  // Move forword for scanning
-            //string fileName11 = $"aligned_{Guid.NewGuid()}.png";
-            //string outputPath11 = Path.Combine(alignedImages, fileName11);
-            //image.Save(outputPath11);
-
-            var debugImage = image.Clone();
-            // Make clone init.
-
-            // 3. Reffrence points check -- DONE   
-            if (false)     
-            {
-               var referenceFields = template["referncefield"]?.ToArray();          // Reffrecne points ko array me return karta hai
-                if (referenceFields != null && referenceFields.Length > 0)          // agr mila to check image par apply hai ya ni hai bubble detaction.
-                {
-                    //demoDetaction.Length
-                    bool allFilled = AreReferenceMarkersFilled(image, template, scaningDetaction);    // Any One False to IMAGE Returning ERROR MSG
-                    if (!allFilled)
-                    {
-                        result.Success = false;
-                        result.FieldResults["Report"] = "Skew markers are not filled or missing. Cannot proceed with OMR processing.";
-                        if (!Directory.Exists($"{alignedImages}/ReffrenceError/"))
-                        {
-                            Directory.CreateDirectory($"{alignedImages}/ReffrenceError/");
-
-                        }
-                        // Move ahead with error folder
-                        string outputPath6 = Path.Combine($"{alignedImages}/ReffrenceError/", result.FileName);
-                        image.Save(outputPath6);
-
-
-
-                        // Move ahead with error folder
-
-                        return result;
-                    }
-                }
-            }
-
-            // 4. Add Error DPI Range
-            if (!IsDpiValid(image, out string dpiError))
-            {
-                return new OmrResult
+                string debugging = Path.GetFileName(Path.GetDirectoryName(imagePath));
+                string alignedImages = $"wFileManager/ScanResult/TemplateImages/{userName}/{debugging}";
+                Directory.CreateDirectory(alignedImages);
+                var result = new OmrResult                         // Make model get Img name and make Dictionary <key, value>
                 {
                     FileName = Path.GetFileName(imagePath),
-                    Success = false,
-                    FieldResults = new Dictionary<string, string>
-                    {
-                        { "Report", dpiError}
-                    }
+                    FieldResults = new Dictionary<string, string>()
                 };
-            }
 
-            // 5. Detact Angle of demo image BUT should be new Image.  <Soniya use less Code>
-            double angle = CalculateSkewAngleFromMarkers(template);
-            using var angledFix = DeskewImage(scanningImage, -angle);
-
-            // ** Add fields scaning filed **
-            var imgServ = Path.GetFileName(imagePath);           // Image File Name
-            result.FieldResults["FileName"] = imgServ;           // Add New FileName into Dictronary
-
-            // Bubble Detaction from fields
-            foreach (var field  in template["fields"])
-            {
-                double bubbleIntensity = field["bubbleIntensity"]?.Value<double>() ?? 0.3;
-                
-                string fieldType = field["fieldType"]!.ToString();    // convert into string if blank return error
-                if (string.IsNullOrWhiteSpace(fieldType))
+                result.FieldResults["Sr"] = $"{ser}";
+                var templateJson = File.ReadAllText(templatePath);  // Json k har Stringify karta hai.
+                var template = JObject.Parse(templateJson);         // String ko Parse karta object banata hai.
+                using var demoImage = Image.Load<Rgba32>(imageUrl);
+                using var originalImage = Image.Load<Rgba32>(imagePath);
+                // 1. Rotated Detacions -- OPEN
+                var exif = originalImage.Metadata.ExifProfile;
+                if (exif != null)
                 {
-                    throw new ArgumentException($"Missing 'fieldType' in field: must be \"formfield\" or \"questionfield\"");
-                }
-
-                string fieldValue ="";
-                if (fieldType != "barcode")
-                {
-                    fieldValue = field["fieldValue"]!.ToString();  // convert into string if blank return error
-                    if (string.IsNullOrWhiteSpace(fieldValue))
+                    // Orientation tag nikalne ki koshish
+                    var orientation = exif.GetValue(ExifTag.Orientation);
+                    if (orientation != null)
                     {
-                        throw new ArgumentException($"Missing 'fieldValue' in field: must be \"Integer\", \"Alphabet\", or \"Custom\"");
-                    }
-                }
-
-                string fieldname = field["fieldName"]!.ToString();                              // extract value
-                var bubblesArray = field["bubbles"]?.ToObject<List<BubbleInfo>>();              // extract value
-                bool allowMultiple = field["allowMultiple"]?.Value<bool>() ?? true;             // extract value
-                string blankOuputSymbol = field["blankOuputSymbol"]?.ToString() ?? "#";         // extract value
-                string multipleBubbleOutput = field["multipleBubbleOutput"]?.ToString() ?? "*"; // extract value
-                
-                if (bubblesArray != null)
-                {
-                    List<Rectangle> bubbleRects;
-                    if (fieldType != "barcode")
-                    {
-                        bubbleRects = bubblesArray.Select(b => new Rectangle(b.X, b.Y, b.Width, b.Height)).ToList();
+                        int orientationValue = (int)orientation.Value;
+                        int rotationDegrees = orientationValue switch
+                        {
+                            1 => 0,
+                            3 => 180,
+                            6 => 90,
+                            8 => 270,
+                            _ => 0
+                        };
+                        result.FieldResults["Rotation"] = $"-{rotationDegrees}";
                     }
                     else
                     {
-                        bubbleRects = new List<Rectangle>
+                        _ILogger.LogDebug("Orientation tag not found in EXIF metadata: {File}", result.FileName);
+                    }
+                }
+                else
+                {
+                    _ILogger.LogDebug("No EXIF metadata found: {File}", result.FileName);
+                }
+
+                // Demo + Scanning image -> OpenCV Mat (temporary Stream/Bitmap helper ke andar dispose hote hain)
+                using var demoImg = ImageSharpToMat(demoImage);
+                using var matInput = ImageSharpToMat(originalImage);
+                demoImage.Dispose();        // ab zarurat nahi, RAM turant free
+                originalImage.Dispose();
+                string fileName2 = $"aligned_{Guid.NewGuid()}.png";
+                string outputPath2 = Path.Combine(alignedImages, fileName2);
+                //Cv2.ImWrite(outputPath2, mat);                                  //  Save processed image
+                //originalImage.Save(outputPath2);
+
+
+                var template2 = JObject.Parse(templateJson);
+
+                // Testing Auto Rotate Methord     -- REWORK on Auto Rotation
+                //var FindRotated = await RotateAndCheckMarkers(matInput, template2);
+                Mat RotatedFinal = matInput;         //-- Jab bhi kabhi hum work karnege wo usko "RotatedFinal"
+
+                // Demo Image cordications
+                var MatImgOut = await AlignWithTemplate(demoImg, template2, "demo");
+
+                // Scanning Image cordications
+                var MatImgOut2 = await AlignWithTemplate(RotatedFinal, template2, "scan");
+
+                if ((MatImgOut == null && MatImgOut2 == null))
+                {
+                    result.Success = false;
+                    result.FieldResults["Report"] = "Skew markers are not filled or missing. Cannot proceed with OMR processing.";
+
+                    string outputPath6 = Path.Combine($"{alignedImages}/ERROR", result.FileName);
+                    Directory.CreateDirectory(Path.GetDirectoryName(outputPath6)!);
+                    using (var errMat = Cv2.ImRead(imagePath)) { Cv2.ImWrite(outputPath6, errMat); }
+                    _ILogger.LogWarning("Skew markers missing for {File}", result.FileName);
+                    return result;
+                }
+
+                Point2f[] demoDetaction = MatImgOut
+                    .Select(p => new Point2f(p.X, p.Y))
+                    .ToArray();
+
+                //Point2f[] scaningDetaction = MatImgOut2.Select(p => new Point2f(p.X, p.Y)).ToArray();
+
+
+                Point2f[] scaningDetaction = null;
+
+                if (MatImgOut2 != null)
+                {
+                    scaningDetaction = MatImgOut2
+                        .Select(p => new Point2f(p.X, p.Y))
+                        .ToArray();
+                }
+
+                // Detected corners mark (Green) and SAVE
+                foreach (var pt in demoDetaction)
+                {
+                    Cv2.Circle(demoImg, (int)pt.X, (int)pt.Y, 1, new Scalar(0, 255, 0), -1);
+                }
+                string markedPath = Path.Combine(alignedImages, $"marked_{Guid.NewGuid()}.png");
+                //demoImg.SaveImage(markedPath);
+
+                // Detact corners mark scaning and SAVE
+                foreach (var pt in scaningDetaction)
+                {
+                    Cv2.Circle(RotatedFinal, (int)pt.X, (int)pt.Y, 1, new Scalar(0, 0, 255), -1);
+                }
+                string markedPath2 = Path.Combine(alignedImages, $"marked_{Guid.NewGuid()}.png");
+                //matInput.SaveImage(markedPath2);
+
+                // Convert into Wrap image <old image cordination > New Image Cordination) and SAVE
+                Mat aligned = new Mat();
+                disposables.Add(aligned);
+                if (demoDetaction.Length == 4 || scaningDetaction.Length == 4)
+                {
+                    using var homography = Cv2.GetPerspectiveTransform(scaningDetaction, demoDetaction);
+                    Cv2.WarpPerspective(RotatedFinal, aligned, homography, demoImg.Size());
+                }
+                else if (demoDetaction.Length == 3 && scaningDetaction.Length == 3)
+                {
+                    using var H = Cv2.GetAffineTransform(scaningDetaction, demoDetaction);
+                    Cv2.WarpAffine(RotatedFinal, aligned, H, demoImg.Size());
+                    markedPath2 = Path.Combine(alignedImages, $"wraped_{Guid.NewGuid()}.png");
+                    //aligned.SaveImage(markedPath2);
+                }
+                else if (demoDetaction.Length == 2 && scaningDetaction.Length == 2)
+                {
+                    //aligned = FixWithTwoPoints(RotatedFinal, scaningDetaction, demoDetaction);
+                    aligned.Dispose();      // purani empty Mat free
+                    aligned = FixWithTwoPointsAdvanced(
+                           RotatedFinal,
+                           scaningDetaction,
+                           demoDetaction,
+                           new CvSize(demoImg.Width, demoImg.Height)
+                    );
+                    disposables.Add(aligned);
+                    markedPath2 = Path.Combine(alignedImages, $"marked_{Guid.NewGuid()}.png");
+                }
+                else
+                {
+                    throw new Exception("Not enough alignment points for warp.");
+                }
+
+                string debugPath = Path.Combine(alignedImages, $"wrapPrespativ_{Guid.NewGuid()}.png");
+                //aligned.SaveImage(debugPath);
+
+                // Convert Mat to byte[] (e.g., PNG in memory)
+                byte[] imageBytes = aligned.ToBytes(".png");
+                Image<Rgba32> scanningImage = Image.Load<Rgba32>(imageBytes);
+                disposables.Add(scanningImage);
+                imageBytes = null!;
+                // Bitmap bitmap = BitmapConverter.ToBitmap(aligned);
+
+                // Continue All Process and SAVE (before bubble Scanning)
+                var image = scanningImage.Clone();  // Move forword for scanning
+                disposables.Add(image);
+                //string fileName11 = $"aligned_{Guid.NewGuid()}.png";
+                //string outputPath11 = Path.Combine(alignedImages, fileName11);
+                //image.Save(outputPath11);
+
+                // Make clone init.
+
+                // 3. Reffrence points check -- DONE   
+                if (false)
+                {
+                    var referenceFields = template["referncefield"]?.ToArray();          // Reffrecne points ko array me return karta hai
+                    if (referenceFields != null && referenceFields.Length > 0)          // agr mila to check image par apply hai ya ni hai bubble detaction.
+                    {
+                        //demoDetaction.Length
+                        bool allFilled = AreReferenceMarkersFilled(image, template, scaningDetaction);    // Any One False to IMAGE Returning ERROR MSG
+                        if (!allFilled)
+                        {
+                            result.Success = false;
+                            result.FieldResults["Report"] = "Skew markers are not filled or missing. Cannot proceed with OMR processing.";
+                            if (!Directory.Exists($"{alignedImages}/ReffrenceError/"))
+                            {
+                                Directory.CreateDirectory($"{alignedImages}/ReffrenceError/");
+
+                            }
+                            // Move ahead with error folder
+                            string outputPath6 = Path.Combine($"{alignedImages}/ReffrenceError/", result.FileName);
+                            image.Save(outputPath6);
+
+
+
+                            // Move ahead with error folder
+
+                            return result;
+                        }
+                    }
+                }
+
+                // 4. Add Error DPI Range
+                if (!IsDpiValid(image, out string dpiError))
+                {
+                    _ILogger.LogWarning("DPI check failed for {File}: {Error}", result.FileName, dpiError);
+                    return new OmrResult
+                    {
+                        FileName = Path.GetFileName(imagePath),
+                        Success = false,
+                        FieldResults = new Dictionary<string, string>
+                    {
+                        { "Report", dpiError}
+                    }
+                    };
+                }
+
+                // 5. Detact Angle of demo image BUT should be new Image.  <Soniya use less Code>
+                double angle = CalculateSkewAngleFromMarkers(template);
+                using var angledFix = DeskewImage(scanningImage, -angle);
+
+                // ** Add fields scaning filed **
+                var imgServ = Path.GetFileName(imagePath);           // Image File Name
+                result.FieldResults["FileName"] = imgServ;           // Add New FileName into Dictronary
+
+                // Bubble Detaction from fields
+                foreach (var field in template["fields"])
+                {
+                    double bubbleIntensity = field["bubbleIntensity"]?.Value<double>() ?? 0.3;
+
+                    string fieldType = field["fieldType"]!.ToString();    // convert into string if blank return error
+                    if (string.IsNullOrWhiteSpace(fieldType))
+                    {
+                        throw new ArgumentException($"Missing 'fieldType' in field: must be \"formfield\" or \"questionfield\"");
+                    }
+
+                    string fieldValue = "";
+                    if (fieldType != "barcode")
+                    {
+                        fieldValue = field["fieldValue"]!.ToString();  // convert into string if blank return error
+                        if (string.IsNullOrWhiteSpace(fieldValue))
+                        {
+                            throw new ArgumentException($"Missing 'fieldValue' in field: must be \"Integer\", \"Alphabet\", or \"Custom\"");
+                        }
+                    }
+
+                    string fieldname = field["fieldName"]!.ToString();                              // extract value
+                    var bubblesArray = field["bubbles"]?.ToObject<List<BubbleInfo>>();              // extract value
+                    bool allowMultiple = field["allowMultiple"]?.Value<bool>() ?? true;             // extract value
+                    string blankOuputSymbol = field["blankOuputSymbol"]?.ToString() ?? "#";         // extract value
+                    string multipleBubbleOutput = field["multipleBubbleOutput"]?.ToString() ?? "*"; // extract value
+
+                    if (bubblesArray != null)
+                    {
+                        List<Rectangle> bubbleRects;
+                        if (fieldType != "barcode")
+                        {
+                            bubbleRects = bubblesArray.Select(b => new Rectangle(b.X, b.Y, b.Width, b.Height)).ToList();
+                        }
+                        else
+                        {
+                            bubbleRects = new List<Rectangle>
                         {
                             new Rectangle(
                                 (int)field["x"],
@@ -319,198 +328,242 @@ namespace Version1.Services
                                 (int)field["height"]
                             )
                         };
-                    }
-                    //var bubbleRects = bubblesArray.Select(b => new Rectangle(b.X, b.Y, b.Width, b.Height)).ToList();
-                    foreach (var pt in bubbleRects)
-                    {
-                        int x = (int)pt.X; 
-                        int y = (int)pt.Y; 
-                        int width = pt.Width; 
-                        int height = pt.Height; 
-                        int diameter = Math.Min(pt.Width, pt.Height); 
-                        
-                        // Take the smaller of width and height
-                        OpenCvSharp.Point topLeftBub = new OpenCvSharp.Point(x, y);
-                        OpenCvSharp.Point bottomRightBub = new OpenCvSharp.Point(x + width, y + height);    
-                        Cv2.Rectangle(aligned, topLeftBub, bottomRightBub, new Scalar(0, 0, 255), 1);
-
-                        //Crop the region of interest(ROI) inside the bounding box
-                        Mat roi = new Mat(aligned, new OpenCvSharp.Rect(x, y, width, height));
-
-                        // ROI ko gray to binary
-                        Mat grayCont = new Mat();
-                        Cv2.CvtColor(roi, grayCont, ColorConversionCodes.BGR2GRAY);
-
-                        // ROI ko Threshold image me convert karna
-                        Mat binaryConvty = new Mat();
-                        Cv2.Threshold(grayCont, binaryConvty, 0, 255, ThresholdTypes.BinaryInv | ThresholdTypes.Otsu);
-                        // Blank Value
-                        OpenCvSharp.Point[][] contoursValConvty;
-                        HierarchyIndex[] _;
-                        Cv2.FindContours(binaryConvty, out contoursValConvty, out _, RetrievalModes.List, ContourApproximationModes.ApproxSimple);
-                        Cv2.DrawContours(aligned, contoursValConvty, -1, new Scalar(225, 255, 0), 1);
-                    }
-                    Mat OMRSheet = new Mat();
-                    
-                    //  CLOSE -- here we will add drawing to design bubble cordination on image and share to isBubble fill methord
-                    var options = field["Custom"]?.ToObject<List<string>>()?.Where(o => !string.IsNullOrWhiteSpace(o)).ToList();
-                    if (field["Custom0"] != null && (options == null || options.Count == 0))
-                    {
-                        throw new ArgumentException($"The field '{fieldname}' includes an 'Custom' array but it is empty or invalid. Please provide valid Custom.");
-                    }
-                    if (options == null || options.Count == 0)
-                    {
-                        options = GenerateOptionsFromFieldType(fieldValue, bubblesArray);
-                    }
-
-                    string readdirection = field["ReadingDirection"]!.ToString();
-                    bool Bestbubble = !field["best_bubble"]?.Value<bool>() ?? true;
-                    var LithoCode = new List<string>();
-                    if (fieldType == "formfield")    
-                    {
-
-                        // Filter Data Results 
-                        bool isMerge = field["isMerged"]?.Value<bool>() ?? false;
-                        if (isMerge)
-                        {
-                            List<string> responseList = new List<string>();
-                            string fieldmerged = field["mergedInto"]!.ToString() ?? null;
-                            var dobFields = template["fields"].Where(f => f["mergedInto"] != null && f["mergedInto"].ToString() == fieldmerged).ToList();
-                            foreach (var fieldDupli in dobFields)
-                            {
-                                var bubblesArrayMarge = fieldDupli["bubbles"]?.ToObject<List<BubbleInfo>>();
-                                var optionsMarge = fieldDupli["Custom"]?.ToObject<List<string>>()?.Where(o => !string.IsNullOrWhiteSpace(o)).ToList();
-                                var bubbleRectsMarge = bubblesArrayMarge.Select(b => new Rectangle(b.X, b.Y, b.Width, b.Height)).ToList();
-                                foreach (var pt in bubbleRectsMarge)
-                                {
-                                    int x = (int)pt.X;
-                                    int y = (int)pt.Y;
-                                    int width = pt.Width;
-                                    int height = pt.Height;
-                                    int diameter = Math.Min(pt.Width, pt.Height);
-
-                                    // Take the smaller of width and height
-                                    OpenCvSharp.Point topLeftBub = new OpenCvSharp.Point(x, y);
-                                    OpenCvSharp.Point bottomRightBub = new OpenCvSharp.Point(x + width, y + height);
-                                    Cv2.Rectangle(aligned, topLeftBub, bottomRightBub, new Scalar(0, 0, 255), 1);
-
-                                    //Crop the region of interest(ROI) inside the bounding box
-                                    Mat roi = new Mat(aligned, new OpenCvSharp.Rect(x, y, width, height));
-
-                                    // ROI ko gray to binary
-                                    Mat grayCont = new Mat();
-                                    Cv2.CvtColor(roi, grayCont, ColorConversionCodes.BGR2GRAY);
-
-                                    // ROI ko Threshold image me convert karna
-                                    Mat binaryConvty = new Mat();
-                                    Cv2.Threshold(grayCont, binaryConvty, 0, 255, ThresholdTypes.BinaryInv | ThresholdTypes.Otsu);
-                                    // Blank Value
-                                    OpenCvSharp.Point[][] contoursValConvty;
-                                    HierarchyIndex[] _;
-                                    Cv2.FindContours(binaryConvty, out contoursValConvty, out _, RetrievalModes.List, ContourApproximationModes.ApproxSimple);
-                                    Cv2.DrawContours(aligned, contoursValConvty, -1, new Scalar(225, 255, 0), 1);
-                                }
-                                var answers = ExtractAnswersFromBubbles(image, bubbleRectsMarge, bubblesArrayMarge, optionsMarge, readdirection, bubbleIntensity, allowMultiple, blankOuputSymbol, multipleBubbleOutput, Bestbubble);
-                                var combined = string.Join("", answers.OrderBy(kv => int.Parse(kv.Key.Replace("Q", ""))).Select(kv => kv.Value).Where(val => val != "No bubble Mark" && val != "InvalidOption"));
-                                Console.WriteLine(combined);
-                                responseList.Add(combined);
-                            }
-                            string finalResponse = string.Join("", responseList);
-                            result.FieldResults[fieldname] = finalResponse;
                         }
-                        else
+                        //var bubbleRects = bubblesArray.Select(b => new Rectangle(b.X, b.Y, b.Width, b.Height)).ToList();
+                        foreach (var pt in bubbleRects)
                         {
-                            var answers = ExtractAnswersFromBubbles(image, bubbleRects, bubblesArray, options, readdirection, bubbleIntensity, allowMultiple, blankOuputSymbol, multipleBubbleOutput, Bestbubble);
-                            var combined = string.Join("", answers.OrderBy(kv => int.Parse(kv.Key.Replace("Q", "")))
-                            .Select(kv => kv.Value).Where(val => val != "No bubble Mark" && val != "InvalidOption"));
-                            Console.WriteLine(combined);
-                            result.FieldResults[fieldname] = combined; //combined.TrimEnd('*');
-                        }
-                    }
-                    else if (fieldType == "questionfield")
-                    {
-                        var answers = ExtractAnswersFromBubbles(image, bubbleRects, bubblesArray, options, readdirection, bubbleIntensity, allowMultiple, blankOuputSymbol, multipleBubbleOutput, Bestbubble);
-                        if (Regex.IsMatch(fieldname, @"q\d+-q\d+", RegexOptions.IgnoreCase))
-                        {
-                            var match = Regex.Match(fieldname, @"q(\d+)-q(\d+)", RegexOptions.IgnoreCase);
-                            int start = int.Parse(match.Groups[1].Value);
-                            int end = int.Parse(match.Groups[2].Value);
-
-                            int index = 0;
-                            for (int q = start; q <= end; q++)
-                            {
-                                string questionKey = $"Q{q}";
-                                if (answers.TryGetValue($"Q{index + 1}", out string? val))
-                                {
-                                    result.FieldResults[questionKey] = val;
-                                }
-                                index++;
-                            }
-                        }
-                        else
-                        {
-                            // Default behavior
-                            foreach (var kv in answers)
-                            {
-                                if (!string.IsNullOrWhiteSpace(kv.Value) && kv.Value != "No bubble Mark" && kv.Value != "InvalidOption")
-                                {
-                                    result.FieldResults[kv.Key] = kv.Value;
-                                }
-                            }
-                        }
-                    }
-                    else if (fieldType == "barcode")
-                    {
-                        var barX = field["x"].ToObject<int>();
-                        var barY = field["y"].ToObject<int>();
-                        var barW = field["width"].ToObject<int>();
-                        var barH = field["height"].ToObject<int>();
-                        var rect = new SixLabors.ImageSharp.Rectangle(barX, barY, barW, barH);
-                        var region = image.Clone(ctx => ctx.Crop(rect));
-                        dynamic imageval = image;
-                        string barcodeValue = BarCodeScaning.ReadBarcode(region);
-
-                        // move bar code error files
-                        if (barcodeValue == "❌ Barcode not detected.")
-                        {
-                            if (!Directory.Exists($"{alignedImages}/BarCodeError/")){
-                                Directory.CreateDirectory($"{alignedImages}/Error/");
-                            }
-                            string BarErrorName = $"{alignedImages}/Error/{result.FileName}";
-                            image.Save(BarErrorName);
-
-                            result.Success = false;
-                            result.FieldResults["Report"] = "Barcode not Found";
-                        }
-
-                        // move bar code error files
-                        result.FieldResults["BarCode"] = barcodeValue;
-                    }
-                   
-                    else if(fieldType == "lithocode")
-                    {
-                        var Lithodcode="";
-                        foreach(var pt in bubblesArray){
                             int x = (int)pt.X;
                             int y = (int)pt.Y;
                             int width = pt.Width;
                             int height = pt.Height;
-                            var rect = new SixLabors.ImageSharp.Rectangle(x, y, width, height);
-                            var region = image.Clone(ctx => ctx.Crop(rect));
-                            LithoCode.Add(IsBubbleFilled(region, bubbleIntensity) ? "1" : "0");
+                            int diameter = Math.Min(pt.Width, pt.Height);
+
+                            // Take the smaller of width and height
+                            OpenCvSharp.Point topLeftBub = new OpenCvSharp.Point(x, y);
+                            OpenCvSharp.Point bottomRightBub = new OpenCvSharp.Point(x + width, y + height);
+                            Cv2.Rectangle(aligned, topLeftBub, bottomRightBub, new Scalar(0, 0, 255), 1);
+
+                            //Crop the region of interest(ROI) inside the bounding box
+                            using var roi = new Mat(aligned, new OpenCvSharp.Rect(x, y, width, height));
+
+                            // ROI ko gray to binary
+                            using var grayCont = new Mat();
+                            Cv2.CvtColor(roi, grayCont, ColorConversionCodes.BGR2GRAY);
+
+                            // ROI ko Threshold image me convert karna
+                            using var binaryConvty = new Mat();
+                            Cv2.Threshold(grayCont, binaryConvty, 0, 255, ThresholdTypes.BinaryInv | ThresholdTypes.Otsu);
+                            // Blank Value
+                            OpenCvSharp.Point[][] contoursValConvty;
+                            HierarchyIndex[] _;
+                            Cv2.FindContours(binaryConvty, out contoursValConvty, out _, RetrievalModes.List, ContourApproximationModes.ApproxSimple);
+                            Cv2.DrawContours(aligned, contoursValConvty, -1, new Scalar(225, 255, 0), 1);
                         }
-                        string concatenatedBinary = string.Join("", LithoCode);
-                        string reversedBinary = new string(concatenatedBinary.Reverse().ToArray());
-                        int decimalValue = Convert.ToInt32(reversedBinary, 2);
-                        Console.WriteLine("Facing Error - " +decimalValue);
-                        result.FieldResults["Lithocode"] = decimalValue.ToString();
+
+                        //  CLOSE -- here we will add drawing to design bubble cordination on image and share to isBubble fill methord
+                        var options = field["Custom"]?.ToObject<List<string>>()?.Where(o => !string.IsNullOrWhiteSpace(o)).ToList();
+                        if (field["Custom0"] != null && (options == null || options.Count == 0))
+                        {
+                            throw new ArgumentException($"The field '{fieldname}' includes an 'Custom' array but it is empty or invalid. Please provide valid Custom.");
+                        }
+                        if (options == null || options.Count == 0)
+                        {
+                            options = GenerateOptionsFromFieldType(fieldValue, bubblesArray);
+                        }
+
+                        string readdirection = field["ReadingDirection"]!.ToString();
+                        bool Bestbubble = !field["best_bubble"]?.Value<bool>() ?? true;
+                        var LithoCode = new List<string>();
+                        if (fieldType == "formfield")
+                        {
+
+                            // Filter Data Results 
+                            bool isMerge = field["isMerged"]?.Value<bool>() ?? false;
+                            if (isMerge)
+                            {
+                                List<string> responseList = new List<string>();
+                                var fieldmerged = field["mergedInto"]!.ToString() ?? null;
+                                var dobFields = template["fields"].Where(f => f["mergedInto"] != null && f["mergedInto"].ToString() == fieldmerged).ToList();
+                                foreach (var fieldDupli in dobFields)
+                                {
+                                    var bubblesArrayMarge = fieldDupli["bubbles"]?.ToObject<List<BubbleInfo>>();
+                                    var optionsMarge = fieldDupli["Custom"]?.ToObject<List<string>>()?.Where(o => !string.IsNullOrWhiteSpace(o)).ToList();
+                                    var bubbleRectsMarge = bubblesArrayMarge.Select(b => new Rectangle(b.X, b.Y, b.Width, b.Height)).ToList();
+                                    foreach (var pt in bubbleRectsMarge)
+                                    {
+                                        int x = (int)pt.X;
+                                        int y = (int)pt.Y;
+                                        int width = pt.Width;
+                                        int height = pt.Height;
+                                        int diameter = Math.Min(pt.Width, pt.Height);
+
+                                        // Take the smaller of width and height
+                                        OpenCvSharp.Point topLeftBub = new OpenCvSharp.Point(x, y);
+                                        OpenCvSharp.Point bottomRightBub = new OpenCvSharp.Point(x + width, y + height);
+                                        Cv2.Rectangle(aligned, topLeftBub, bottomRightBub, new Scalar(0, 0, 255), 1);
+
+                                        //Crop the region of interest(ROI) inside the bounding box
+                                        using var roi = new Mat(aligned, new OpenCvSharp.Rect(x, y, width, height));
+
+                                        // ROI ko gray to binary
+                                        using var grayCont = new Mat();
+                                        Cv2.CvtColor(roi, grayCont, ColorConversionCodes.BGR2GRAY);
+
+                                        // ROI ko Threshold image me convert karna
+                                        using var binaryConvty = new Mat();
+                                        Cv2.Threshold(grayCont, binaryConvty, 0, 255, ThresholdTypes.BinaryInv | ThresholdTypes.Otsu);
+                                        // Blank Value
+                                        OpenCvSharp.Point[][] contoursValConvty;
+                                        HierarchyIndex[] _;
+                                        Cv2.FindContours(binaryConvty, out contoursValConvty, out _, RetrievalModes.List, ContourApproximationModes.ApproxSimple);
+                                        Cv2.DrawContours(aligned, contoursValConvty, -1, new Scalar(225, 255, 0), 1);
+                                    }
+                                    var answers = ExtractAnswersFromBubbles(image, bubbleRectsMarge, bubblesArrayMarge, optionsMarge, readdirection, bubbleIntensity, allowMultiple, blankOuputSymbol, multipleBubbleOutput, Bestbubble);
+                                    var combined = string.Join("", answers.OrderBy(kv => int.Parse(kv.Key.Replace("Q", ""))).Select(kv => kv.Value).Where(val => val != "No bubble Mark" && val != "InvalidOption"));
+                                    _ILogger.LogDebug("Field {Field} => {Value}", fieldname, combined);
+                                    responseList.Add(combined);
+                                }
+                                string finalResponse = string.Join("", responseList);
+                                result.FieldResults[fieldname] = finalResponse;
+                            }
+                            else
+                            {
+                                var answers = ExtractAnswersFromBubbles(image, bubbleRects, bubblesArray, options, readdirection, bubbleIntensity, allowMultiple, blankOuputSymbol, multipleBubbleOutput, Bestbubble);
+                                var combined = string.Join("", answers.OrderBy(kv => int.Parse(kv.Key.Replace("Q", "")))
+                                .Select(kv => kv.Value).Where(val => val != "No bubble Mark" && val != "InvalidOption"));
+                                _ILogger.LogDebug("Field {Field} => {Value}", fieldname, combined);
+                                result.FieldResults[fieldname] = combined; //combined.TrimEnd('*');
+                            }
+                        }
+                        else if (fieldType == "questionfield")
+                        {
+                            var answers = ExtractAnswersFromBubbles(image, bubbleRects, bubblesArray, options, readdirection, bubbleIntensity, allowMultiple, blankOuputSymbol, multipleBubbleOutput, Bestbubble);
+                            if (Regex.IsMatch(fieldname, @"q\d+-q\d+", RegexOptions.IgnoreCase))
+                            {
+                                var match = Regex.Match(fieldname, @"q(\d+)-q(\d+)", RegexOptions.IgnoreCase);
+                                int start = int.Parse(match.Groups[1].Value);
+                                int end = int.Parse(match.Groups[2].Value);
+
+                                int index = 0;
+                                for (int q = start; q <= end; q++)
+                                {
+                                    string questionKey = $"Q{q}";
+                                    if (answers.TryGetValue($"Q{index + 1}", out string? val))
+                                    {
+                                        result.FieldResults[questionKey] = val;
+                                    }
+                                    index++;
+                                }
+                            }
+                            else
+                            {
+                                // Default behavior
+                                foreach (var kv in answers)
+                                {
+                                    if (!string.IsNullOrWhiteSpace(kv.Value) && kv.Value != "No bubble Mark" && kv.Value != "InvalidOption")
+                                    {
+                                        result.FieldResults[kv.Key] = kv.Value;
+                                    }
+                                }
+                            }
+                        }
+
+                        else if (fieldType == "barcode")
+                        {
+                            var barX = field["x"].ToObject<int>();
+                            var barY = field["y"].ToObject<int>();
+                            var barW = field["width"].ToObject<int>();
+                            var barH = field["height"].ToObject<int>();
+                            var rect = new SixLabors.ImageSharp.Rectangle(barX, barY, barW, barH);
+                            using var region = image.Clone(ctx => ctx.Crop(rect));
+                            dynamic imageval = image;
+                            string barcodeValue = BarCodeScaning.ReadBarcode(region);
+
+                            // move bar code error files
+                            if (barcodeValue == "❌ Barcode not detected.")
+                            {
+                                if (!Directory.Exists($"{alignedImages}/BarCodeError/"))
+                                {
+                                    Directory.CreateDirectory($"{alignedImages}/Error/");
+                                }
+                                string BarErrorName = $"{alignedImages}/Error/{result.FileName}";
+                                image.Save(BarErrorName);
+
+                                result.Success = false;
+                                result.FieldResults["Report"] = "Barcode not Found";
+                            }
+
+                            // move bar code error files
+                            result.FieldResults["BarCode"] = barcodeValue;
+                        }
+
+                        else if (fieldType == "lithocode")
+                        {
+                            var Lithodcode = "";
+                            foreach (var pt in bubblesArray)
+                            {
+                                int x = (int)pt.X;
+                                int y = (int)pt.Y;
+                                int width = pt.Width;
+                                int height = pt.Height;
+                                var rect = new SixLabors.ImageSharp.Rectangle(x, y, width, height);
+                                using var region = image.Clone(ctx => ctx.Crop(rect));
+                                LithoCode.Add(IsBubbleFilled(region, bubbleIntensity) ? "1" : "0");
+                            }
+                            string concatenatedBinary = string.Join("", LithoCode);
+                            string reversedBinary = new string(concatenatedBinary.Reverse().ToArray());
+                            int decimalValue = Convert.ToInt32(reversedBinary, 2);
+                            _ILogger.LogDebug("Lithocode {Value} ({File})", decimalValue, result.FileName);
+                            result.FieldResults["Lithocode"] = decimalValue.ToString();
+                        }
                     }
                 }
+                string markedPat2 = Path.Combine(alignedImages, result.FileName);
+                aligned.SaveImage(markedPat2);
+                result.ProcessedAt = DateTime.UtcNow;
+                _ILogger.LogDebug("OMR sheet {File} processed in {Ms} ms", result.FileName, swTotal.ElapsedMilliseconds);
+                return result;
             }
-            string markedPat2 = Path.Combine(alignedImages,result.FileName);
-            aligned.SaveImage(markedPat2);
-            result.ProcessedAt = DateTime.UtcNow;
-            return result;
+            catch (Exception ex)
+            {
+                _ILogger.LogError(ex, "OMR processing failed for {File} (Sr {Sr})", Path.GetFileName(imagePath), ser);
+                throw;
+            }
+            finally
+            {
+                for (int i = disposables.Count - 1; i >= 0; i--)
+                {
+                    try { disposables[i]?.Dispose(); }
+                    catch (Exception dex) { _ILogger.LogWarning(dex, "Dispose failed"); }
+                }
+                disposables.Clear();
+                ReleaseMemoryIfNeeded();
+            }
+        }
+
+        // ImageSharp -> OpenCV Mat. Temporary MemoryStream + GDI Bitmap yahi dispose ho jate hain.
+        private static Mat ImageSharpToMat(Image<Rgba32> img)
+        {
+            using var ms = new MemoryStream();
+            img.SaveAsBmp(ms);
+            ms.Seek(0, SeekOrigin.Begin);
+            using var bmp = new System.Drawing.Bitmap(ms);
+            return OpenCvSharp.Extensions.BitmapConverter.ToMat(bmp);   // data copy hota hai, bmp safe to dispose
+        }
+
+        // Har GcEvery sheets baad LOH compact + forced GC (bade image buffers ke liye)
+        private void ReleaseMemoryIfNeeded()
+        {
+            int n = Interlocked.Increment(ref _processedCount);
+            if (n % GcEvery != 0) return;
+
+            long beforeMb = GC.GetTotalMemory(false) / (1024 * 1024);
+            GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+            long afterMb = GC.GetTotalMemory(false) / (1024 * 1024);
+            _ILogger.LogInformation("GC after {Count} sheets: managed memory {Before} MB -> {After} MB", n, beforeMb, afterMb);
         }
 
 
@@ -526,7 +579,7 @@ namespace Version1.Services
             for (int rotation = 0; rotation < 4; rotation++)
             {
                 byte[] data = matImg.ImEncode(".png");
-                Image<Rgba32> image = Image.Load<Rgba32>(data);
+                using Image<Rgba32> image = Image.Load<Rgba32>(data);
                 bool found = false;
                 foreach (var pos in positions)
                 {
@@ -535,7 +588,7 @@ namespace Version1.Services
                         continue;
 
                     var rect = new SixLabors.ImageSharp.Rectangle(marker.X, marker.Y, marker.Width, marker.Height);
-                    var region = image.Clone(ctx => ctx.Crop(rect));
+                    using var region = image.Clone(ctx => ctx.Crop(rect));
 
                     if (IsBubbleFilled(region, bubbleIntensity))
                     {
@@ -602,7 +655,7 @@ namespace Version1.Services
             //List<Point2f> value = new List(Point2f);
             if (SelctImg == "demo")
                 pointsList.Clear();
-            else if (SelctImg == "scan") 
+            else if (SelctImg == "scan")
                 pointsList2.Clear();
 
             return await Task.Run(() =>
@@ -621,7 +674,7 @@ namespace Version1.Services
                 foreach (var key in markerOrder)
                 {
                     var obj = refField[key]?.ToObject<BubbleInfo2Class>();
-                    if (obj != null)   
+                    if (obj != null)
                     {
                         templateCorners.Add(new Point2f(obj.X, obj.Y));
                     }
@@ -710,14 +763,14 @@ namespace Version1.Services
                     int newX = Math.Max(0, x - extra);
                     int newY = Math.Max(0, y - extra);
                     int newWidth = Math.Min(inputImage.Width - newX, width + extra * 4);
-                    int newHeight = Math.Min(inputImage.Height - newY, height +extra * 4);
+                    int newHeight = Math.Min(inputImage.Height - newY, height + extra * 4);
                     OpenCvSharp.Rect Rect2 = new OpenCvSharp.Rect(newX, newY, newWidth, newHeight);
                     using var roiImage = new Mat(inputImage, Rect2);
                     // ROI ko gray to binary
-                    Mat gray = new Mat();
+                    using var gray = new Mat();
                     Cv2.CvtColor(roiImage, gray, ColorConversionCodes.BGR2GRAY);
                     // ROI ko Threshold image me convert karna
-                    Mat binary = new Mat();
+                    using var binary = new Mat();
                     Cv2.Threshold(gray, binary, 0, 255, ThresholdTypes.BinaryInv | ThresholdTypes.Otsu);
                     // Blank Value
                     OpenCvSharp.Point[][] contoursVal;
@@ -737,7 +790,7 @@ namespace Version1.Services
                             .First().Index;
 
 
-                            
+
                         // Circle contour Points Range wise -- OPEN ||  contoursVal array se max points X,Y index range 15 to 40 se match karna. 
                         //int validMin = 15;
                         //int validMax = 60;
@@ -839,7 +892,7 @@ namespace Version1.Services
         //inputImage.SaveImage(outputPath2);
         //Mat aligned = new Mat();
         // Add in array list of cordinations.
-  
+
 
         public void AddPoint(float x, float y)
         {
@@ -880,7 +933,7 @@ namespace Version1.Services
                 points.Add(new PointF(marker.X + marker.Width / 2f, marker.Y + marker.Height / 2f));
                 if (marker == null) return false;
                 var rect = new SixLabors.ImageSharp.Rectangle(marker.X, marker.Y, marker.Width, marker.Height);
-                var region = image.Clone(ctx => ctx.Crop(rect));
+                using var region = image.Clone(ctx => ctx.Crop(rect));
 
                 if (!IsBubbleFilled(region, bubbleIntensity))
                 {
@@ -933,7 +986,7 @@ namespace Version1.Services
             using var mat = BitmapConverter.ToMat(bitmap);
 
             var center = new OpenCvSharp.Point2f(mat.Width / 2, mat.Height / 2);
-            var rotationMatrix = Cv2.GetRotationMatrix2D(center, angle, 1.0);    // Rotation matrix create karna.
+            using var rotationMatrix = Cv2.GetRotationMatrix2D(center, angle, 1.0);    // Rotation matrix create karna.
             Cv2.WarpAffine(mat, mat, rotationMatrix, mat.Size());                // Rotate karna.
             using var rotatedBmp = BitmapConverter.ToBitmap(mat);
             using var mem = new MemoryStream();
@@ -961,7 +1014,7 @@ namespace Version1.Services
                 {
                     optStr = colCount;
                 }
-                else if(RowCount > 1)
+                else if (RowCount > 1)
                 {
                     optStr = RowCount;
                 }
@@ -978,7 +1031,7 @@ namespace Version1.Services
 
         // Checking Horizontal Or Vertical direction me Bubble Check kar k result return karta hai.  // Direction ko validate karna 
         private Dictionary<string, string> ExtractAnswersFromBubbles(Image<Rgba32> image, List<Rectangle> bubbleRects, List<BubbleInfo> bubbleInfos, List<string> options,
-         string? readdirection, double bubbleIntensity, bool allowMultiple, string blankOuputSymbol, string multipleBubbleOutput, bool Bestbubble)  
+         string? readdirection, double bubbleIntensity, bool allowMultiple, string blankOuputSymbol, string multipleBubbleOutput, bool Bestbubble)
         {
 
             if (string.IsNullOrWhiteSpace(readdirection))
@@ -1006,7 +1059,7 @@ namespace Version1.Services
                 int bubbleInGroupIndex = 0;
                 var densityList = new List<(double Density, string Option)>();
                 foreach (var bubble in sortedGroup)
-                { 
+                {
                     int index = bubbleInfos.IndexOf(bubble);
                     if (index < 0 || index >= bubbleRects.Count)
                         continue;
@@ -1019,7 +1072,7 @@ namespace Version1.Services
                         Math.Min(originalRect.Width + 2 * padding, image.Width - originalRect.X + padding),
                         Math.Min(originalRect.Height + 2 * padding, image.Height - originalRect.Y + padding)
                     );
-                    var cell2 = image.Clone(ctx => ctx.Crop(paddedRect));
+                    using var cell2 = image.Clone(ctx => ctx.Crop(paddedRect));
 
                     // Top Dancity of bubbble 
                     (bool isBubbleFilled, double densityPercent) = IsBubbleFilledPre(cell2, bubbleIntensity);   // D Strecturing
@@ -1031,18 +1084,19 @@ namespace Version1.Services
                             if (Bestbubble)
                             {   // Best bubble 
                                 filledOptions.Add(options[optionIndex]);
-                            }   
+                            }
                             else
                             {   // Without Best Bubble
                                 densityList.Add((densityPercent, options[optionIndex]));
                             }
                         }
-                    } bubbleInGroupIndex++;
+                    }
+                    bubbleInGroupIndex++;
                 }
 
 
                 string output = "";
-                if (Bestbubble)   
+                if (Bestbubble)
                 {
                     if (filledOptions.Count == 0)
                     {
@@ -1099,17 +1153,18 @@ namespace Version1.Services
             //Cv2.ImWrite(outputPath11, gray);
 
             // Noise Remove with OpenCV
-            Cv2.MorphologyEx(binary, binary, MorphTypes.Open, Cv2.GetStructuringElement(MorphShapes.Rect, new OpenCvSharp.Size(3, 3)));
-             //Cv2.ImWrite(outputPath11, binary);
+            using var kernel = Cv2.GetStructuringElement(MorphShapes.Rect, new OpenCvSharp.Size(3, 3));
+            Cv2.MorphologyEx(binary, binary, MorphTypes.Open, kernel);
+            //Cv2.ImWrite(outputPath11, binary);
 
             // Convert into negative black 
             using var inverted = new Mat();
             Cv2.BitwiseNot(binary, inverted);
             int blackPixels = Cv2.CountNonZero(inverted);
             bool resBub2 = blackPixels > bubbleIntensity;
-            var addStack = new Dictionary<bool, int>();   
+            var addStack = new Dictionary<bool, int>();
             int totalPixels = inverted.Rows * inverted.Cols;
-            double density = (double)blackPixels / totalPixels;            
+            double density = (double)blackPixels / totalPixels;
             double getDencityPercent = density * 100;
             return (resBub2, getDencityPercent);
         }
@@ -1148,8 +1203,8 @@ namespace Version1.Services
             //Cv2.ImWrite(outputPath11, binary);
 
             // Noise Remove with OpenCV
-            Cv2.MorphologyEx(binary, binary, MorphTypes.Open,
-            Cv2.GetStructuringElement(MorphShapes.Rect, new OpenCvSharp.Size(3, 3)));
+            using var kernel = Cv2.GetStructuringElement(MorphShapes.Rect, new OpenCvSharp.Size(3, 3));
+            Cv2.MorphologyEx(binary, binary, MorphTypes.Open, kernel);
 
             // Convert into negative black 
             using var inverted = new Mat();
@@ -1233,9 +1288,9 @@ namespace Version1.Services
             double rotationAngle = (angle2 - angle1) * 180.0 / Math.PI;
 
             // 3. Rotate image around scan point 1
-            Mat rotationMatrix = Cv2.GetRotationMatrix2D(s1, rotationAngle, 1.0);
+            using Mat rotationMatrix = Cv2.GetRotationMatrix2D(s1, rotationAngle, 1.0);
 
-            Mat rotated = new Mat();
+            using Mat rotated = new Mat();
             Cv2.WarpAffine(input, rotated, rotationMatrix, input.Size());
 
             // 4. Rotation ke baad scanPt1 ki new position
@@ -1252,7 +1307,7 @@ namespace Version1.Services
             double shiftY = d1.Y - newY;
 
             // 6. Final affine transform matrix (rotation + translation)
-            Mat finalMat = rotationMatrix.Clone();
+            using Mat finalMat = rotationMatrix.Clone();
             finalMat.Set(0, 2, finalMat.At<double>(0, 2) + shiftX);
             finalMat.Set(1, 2, finalMat.At<double>(1, 2) + shiftY);
 
@@ -1301,7 +1356,7 @@ namespace Version1.Services
             Point2f center = scanPts[0];
 
             // Rotation + scale matrix
-            Mat rotMat = Cv2.GetRotationMatrix2D(center, angle, scale);
+            using Mat rotMat = Cv2.GetRotationMatrix2D(center, angle, scale);
 
             // Translation correction
             double tx = demoPts[0].X - scanPts[0].X;

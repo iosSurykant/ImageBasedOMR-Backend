@@ -1,8 +1,11 @@
 ﻿using System.Data;
+using System.Globalization;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using System.Text;
 using System.Text.RegularExpressions;
 using Dapper;
+using DocumentFormat.OpenXml.EMMA;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Cors;
 using Microsoft.AspNetCore.Http;
@@ -31,7 +34,6 @@ namespace SQCScanner.Controllers
     {
         private readonly IConfiguration _configuration;
         private readonly string _connectionString;
-
         private readonly IHostEnvironment _env;
         private readonly ApplicationDbContext _context;
 
@@ -210,8 +212,7 @@ namespace SQCScanner.Controllers
                 {
                     // Get all table names matching "Template_%"
                     var tableNamesQuery = @"
-                SELECT TABLE_NAME 
-                FROM information_schema.TABLES 
+                SELECT TABLE_NAME FROM information_schema.TABLES 
                 WHERE TABLE_NAME LIKE 'Template_%'";
 
                     var tableNames = await _conn.QueryAsync<string>(tableNamesQuery);
@@ -294,7 +295,6 @@ namespace SQCScanner.Controllers
         [HttpGet("Dash_Avrage")]
         public async Task<ActionResult> AvrageScore()
         {
-            //object res = null;
             dynamic res;
             try
             {
@@ -331,7 +331,6 @@ namespace SQCScanner.Controllers
                         Average_success = successRate + "%",
                         Average_fail = failRate + "%"
                     };
-
                 }
             }
             catch (Exception ex)
@@ -673,7 +672,7 @@ namespace SQCScanner.Controllers
         }
 
         [HttpGet("GetDB_Rec")]
-        public async Task<IActionResult> GetDB_Rec(string? fileName)
+        public async Task<IActionResult> GetDB_Rec(string? fileName, bool doesDownload=false, [FromQuery] int pageNo = 1, [FromQuery] int records = 10)
         {
             dynamic res;
             var result = "";
@@ -683,17 +682,29 @@ namespace SQCScanner.Controllers
                 var tokenHandler = new JwtSecurityTokenHandler();
                 var jwtToken = tokenHandler.ReadJwtToken(token);
                 var userId = jwtToken.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier || c.Type == "nameid")?.Value;
-
+                string UserRole = jwtToken.Claims.FirstOrDefault(a => a.Type == ClaimTypes.NameIdentifier || a.Type == "role")?.Value;
+                string refranceId = jwtToken.Claims.FirstOrDefault(c => c.Type == "refranceId")?.Value;
+                var empList = _context.empModels.AsQueryable().Where(x => x.RefranceId == refranceId);
                 using (var _conn = new SqlConnection(_connectionString))
                 {
                     _conn.Open();
                     var querry = "";
                     dynamic queryResult;
                     dynamic respose;
+                    int dataCount = 0;
                     if (fileName==null)
                     {
-                        querry = $"SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES where TABLE_NAME LIKE 'Tem[_]{userId}[_]%';";
-                        queryResult = _conn.Query(querry).ToList();
+                        querry = $"SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME LIKE 'Tem[_]{userId}[_]%' ORDER BY TRY_CONVERT( DATETIME2, STUFF(RIGHT(TABLE_NAME, 19), 11, 1, ' '), 105 ) DESC;";
+
+                        if (pageNo == 0 && records ==0)
+                        {
+                            queryResult = _conn.Query(querry).ToList();
+                        }
+                        else
+                        {
+                            queryResult = _conn.Query(querry).Skip((pageNo - 1) * records).Take(records).ToList();
+                        }
+
                         respose = _conn.Query(querry);
 
                         var split = "";
@@ -707,8 +718,6 @@ namespace SQCScanner.Controllers
                             {
                                 int Tempdata = int.Parse(match.Groups["templateId"].Value);
                                 int data = int.Parse(match.Groups["templateId"].Value);
-                                //var TempNameUnq = _context.ImgTemplate.Where(x => x.Id == Tempdata);
-                                //var EmpDetails = _context.empModels.Where(x => x.Id == data);
                                 results.Add(new TableInfo
                                 {
                                     UserId = match.Groups["userId"].Value,
@@ -720,36 +729,105 @@ namespace SQCScanner.Controllers
                             }
                         }
                         queryResult = "";
-                        queryResult = results;
+                        queryResult = results.OrderByDescending(a => DateTime.ParseExact(a.DateTime, "dd-MM-yyyy-HH:mm:ss", CultureInfo.InvariantCulture)).ToList();
+
+                        return Ok(res = new
+                        {
+                            state = true,
+                            queryResult
+                        });
 
                     }
                     else
                     {
-                        querry = $@"SELECT * FROM [{fileName}];";
-                        queryResult = _conn.Query(querry);
+
+                        if (doesDownload)
+                        {
+                            string dataFile = fileName.Split("_")[3];
+                            dataFile = $"Complete_{dataFile}.csv";
+
+                            Response.ContentType = "text/csv; charset=utf-8";
+
+                            Response.Headers.Append(
+                                "Content-Disposition",
+                                $"attachment; filename=\"{dataFile}\""
+                            );
+
+                            string query = $"SELECT * FROM [{fileName}]";
+
+                            using var reader = await _conn.ExecuteReaderAsync(query);
+
+                            await using var writer = new StreamWriter(
+                                Response.Body,
+                                new UTF8Encoding(true),
+                                bufferSize: 1024,
+                                leaveOpen: true
+                            );
+
+                            // Column Headers
+                            var headers = Enumerable.Range(0, reader.FieldCount)
+                                .Select(i => EscapeCsv(reader.GetName(i)));
+
+                            await writer.WriteLineAsync(string.Join(",", headers));
+
+                            // Read and write records
+                            while (await reader.ReadAsync())
+                            {
+                                var row = Enumerable.Range(0, reader.FieldCount)
+                                    .Select(i => EscapeCsv(
+                                        reader.IsDBNull(i)
+                                            ? ""
+                                            : Convert.ToString(reader.GetValue(i)) ?? ""
+                                    ));
+
+                                await writer.WriteLineAsync(string.Join(",", row));
+                            }
+
+                            await writer.FlushAsync();
+
+                            return new EmptyResult();
+                        }
+
+                        else
+                        {
+                            int pageNumber = pageNo;
+                            int pageSize = records;
+
+                            int offset = (pageNumber - 1) * pageSize;
+                            //string query = $@" SELECT * FROM [{fileName}] ORDER BY Id LIMIT @PageSize OFFSET @Offset;";
+                            string query = $@" SELECT *
+                            FROM [{fileName}] ORDER BY Id
+                            OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY;";
+                            queryResult = _conn.Query(query, new
+                            {
+                                PageSize = pageSize,
+                                Offset = offset
+                            });
+                            string countQuery = $@" SELECT COUNT(*) FROM [{fileName}];";
+                            dataCount = _conn.ExecuteScalar<int>(countQuery);
+                            res = new
+                            {
+                                state = true,
+                                TotalCount = dataCount,
+                                queryResult,
+                            };
+                            _conn.Close();
+                            return Ok(res);
+                        }
+
                     }
 
-
-
-                res = new
-                    {
-                        state = true,
-                        queryResult
-                    };
-
-                    _conn.Close();
                 }
             }
             catch (Exception ex)
             {
-                res = new
+                return BadRequest( res = new
                 {
                     state = false,
                     message = ex.Message
-                };
+                });
 
             }
-            return Ok(res);
         }
         public class TableInfo
         {
@@ -759,6 +837,15 @@ namespace SQCScanner.Controllers
             public string DateTime { get; set; }
             public string FileName { get; set; }
         }
+
+        private static string EscapeCsv(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+                return "";
+
+            return "\"" + value.Replace("\"", "\"\"") + "\"";
+        }
+
 
         [HttpDelete("Delete_Rec")]
         public async Task<IActionResult> Delete_Rec(string deleteName)
@@ -788,5 +875,76 @@ namespace SQCScanner.Controllers
             }
             return Ok(res);
         }
+
+
+
+
+        [HttpGet("DownloadRecords")]
+        public async Task<IActionResult> DownloadRecords([FromQuery] string fileName)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(fileName))
+                    return BadRequest("File name is required.");
+
+
+
+                var connection = _context.Database.GetDbConnection();
+
+                if (connection.State != ConnectionState.Open)
+                    await connection.OpenAsync();
+
+                using var command = connection.CreateCommand();
+
+                command.CommandText = $"SELECT * FROM [{fileName}]";
+
+                using var reader = await command.ExecuteReaderAsync();
+
+                using var memoryStream = new MemoryStream();
+
+                using (var writer = new StreamWriter(
+                    memoryStream, Encoding.UTF8, leaveOpen: true))
+                {
+                    // CSV Headers
+                    var headers = Enumerable.Range(0, reader.FieldCount)
+                        .Select(i => EscapeCsv(reader.GetName(i)));
+
+                    await writer.WriteLineAsync(
+                        string.Join(",", headers));
+
+                    // CSV Data
+                    while (await reader.ReadAsync())
+                    {
+                        var row = Enumerable.Range(0, reader.FieldCount)
+                            .Select(i => EscapeCsv(
+                                reader.IsDBNull(i)
+                                    ? ""
+                                    : Convert.ToString(
+                                        reader.GetValue(i)) ?? ""
+                            ));
+
+                        await writer.WriteLineAsync(
+                            string.Join(",", row));
+                    }
+
+                    await writer.FlushAsync();
+                }
+
+                memoryStream.Position = 0;
+
+                return File(
+                    memoryStream.ToArray(),
+                    "text/csv",
+                    $"Complete_{fileName}.csv"
+                );
+            }
+            catch (Exception ex)
+            {
+
+                return StatusCode(500, "Unable to download file.");
+            }
+        }
+
+
     }
 }
